@@ -14,7 +14,7 @@ struct HomeView: View {
                     EmptyStateView(
                         systemImage: "tray",
                         title: "Your library is empty",
-                        message: "Add an M3U playlist or an Xtream account to see your channels here. CarIPTV doesn't include any channels.",
+                        message: "Add an M3U playlist, or connect Xtream, Jellyfin, Emby or Plex to see your content here. CarIPTV doesn't include any channels.",
                         actionTitle: "Add a Source",
                         action: { AppRouter.shared.isAddSourcePresented = true }
                     )
@@ -49,7 +49,11 @@ struct HomeView: View {
             Section("Sources") {
                 ForEach(store.sources) { source in
                     NavigationLink {
-                        SourceChannelsView(source: source)
+                        if source.hasMediaLibraries {
+                            MediaSourceView(source: source)
+                        } else {
+                            SourceChannelsView(source: source)
+                        }
                     } label: {
                         SourceRow(source: source)
                     }
@@ -82,11 +86,17 @@ struct SourceRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(source.name)
                     .lineLimit(1)
-                Text("\(source.kindTitle) · \(source.channelCount) channels")
+                Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var subtitle: String {
+        source.channelCount > 0
+            ? "\(source.kindTitle) · \(Source.channelCountText(source.channelCount))"
+            : source.kindTitle
     }
 
     private var icon: String {
@@ -94,6 +104,7 @@ struct SourceRow: View {
         case .m3uURL: "link"
         case .m3uFile: "doc.text"
         case .xtream: "antenna.radiowaves.left.and.right"
+        case .mediaServer, .plex: "server.rack"
         }
     }
 }

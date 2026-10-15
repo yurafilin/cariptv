@@ -39,10 +39,14 @@ final class PlaybackController {
         state = .loading
         Log.playback.info("play \(media.url.absoluteString, privacy: .private)")
 
-        let item = AVPlayerItem(url: media.url)
+        // Server posters carry internal URLs; the stream URL with credentials is built only now.
+        let item = AVPlayerItem(url: LibraryStore.shared.resolvedURL(media.url))
         itemObservation = item.observe(\.status, options: [.new]) { item, _ in
             let status = item.status
-            let message = item.error?.localizedDescription
+            if let error = item.error {
+                Log.playback.error("item error: \(String(describing: error))")
+            }
+            let message = Self.describe(item.error)
             Task { @MainActor in PlaybackController.shared.itemStatusChanged(status, message: message) }
         }
         player.replaceCurrentItem(with: item)
@@ -94,11 +98,22 @@ final class PlaybackController {
 
     // MARK: - Observation
 
+    /// Network errors read well as they are; media errors ("CoreMediaErrorDomain -16172") do not.
+    nonisolated static func describe(_ error: Error?) -> String? {
+        guard let error = error as NSError? else { return nil }
+        if error.domain == NSURLErrorDomain {
+            return error.localizedDescription
+        }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError, underlying.domain == NSURLErrorDomain {
+            return underlying.localizedDescription
+        }
+        return String(localized: "This video can't be played. Its format may not be supported.")
+    }
+
     private func itemStatusChanged(_ status: AVPlayerItem.Status, message: String?) {
         switch status {
         case .failed:
-            Log.playback.error("item failed: \(message ?? "unknown")")
-            state = .failed(message ?? String(localized: "This stream can't be played."))
+            state = .failed(message ?? String(localized: "This video can't be played. Its format may not be supported."))
         case .readyToPlay:
             if state == .loading, player.timeControlStatus == .playing {
                 state = .playing

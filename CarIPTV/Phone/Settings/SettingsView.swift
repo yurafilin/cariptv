@@ -11,7 +11,7 @@ struct SettingsView: View {
                         Label {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Manage Sources")
-                                Text("M3U · Xtream")
+                                Text(verbatim: "M3U · Xtream · Jellyfin · Emby · Plex")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

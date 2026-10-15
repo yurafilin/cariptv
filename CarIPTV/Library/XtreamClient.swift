@@ -88,7 +88,7 @@ struct XtreamClient {
 
     // MARK: - HTTP
 
-    private func request<Response: Decodable>(action: String?) async throws -> Response {
+    func request<Response: Decodable>(action: String?, parameters: [String: String] = [:]) async throws -> Response {
         guard var components = URLComponents(url: server.appendingPathComponent("player_api.php"), resolvingAgainstBaseURL: false) else {
             throw XtreamError.invalidServer
         }
@@ -99,6 +99,7 @@ struct XtreamClient {
         if let action {
             query.append(URLQueryItem(name: "action", value: action))
         }
+        query += parameters.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         components.queryItems = query
         guard let url = components.url else { throw XtreamError.invalidServer }
 
@@ -121,7 +122,7 @@ struct XtreamClient {
         let status: LooseString?
     }
 
-    private struct Category: Decodable {
+    struct Category: Decodable {
         let categoryID: LooseString?
         let categoryName: LooseString?
         enum CodingKeys: String, CodingKey {
@@ -160,6 +161,167 @@ struct LooseString: Decodable, Hashable {
             value = bool ? "1" : "0"
         } else {
             value = nil
+        }
+    }
+}
+
+/// Xtream's on-demand sections (movies, series) as a media server; live channels stay in the channel list.
+struct XtreamCatalog: MediaServer {
+    static let moviesID = "vod"
+    static let seriesID = "series"
+
+    let client: XtreamClient
+
+    func libraries() async throws -> [MediaLibrary] {
+        [
+            MediaLibrary(id: Self.moviesID, name: String(localized: "Movies"), kind: .movies),
+            MediaLibrary(id: Self.seriesID, name: String(localized: "Series"), kind: .shows),
+        ]
+    }
+
+    func items(in library: MediaLibrary) async throws -> [MediaItem] {
+        let isMovies = library.id == Self.moviesID
+        async let categoriesRequest: [XtreamClient.Category] = client.request(action: isMovies ? "get_vod_categories" : "get_series_categories")
+        async let entriesRequest: [Entry] = client.request(action: isMovies ? "get_vod_streams" : "get_series")
+        let (categories, entries) = try await (categoriesRequest, entriesRequest)
+        let names = Self.categoryNames(categories)
+        return entries.compactMap { isMovies ? Self.movie($0, names) : Self.series($0, names) }
+    }
+
+    func children(of item: MediaItem) async throws -> [MediaItem] {
+        guard item.kind == .series, let seriesID = item.id.split(separator: ":").last else { return [] }
+        let info: SeriesInfo = try await client.request(action: "get_series_info", parameters: ["series_id": String(seriesID)])
+        return Self.episodes(info, fallbackImage: item.imageURL)
+    }
+
+    /// `movie/<id>.<ext>` and `series/<id>.<ext>` map onto the panel's stream paths.
+    func playbackURL(itemID: String) -> URL? {
+        let parts = itemID.split(separator: "/", maxSplits: 1)
+        guard parts.count == 2, parts[0] == "movie" || parts[0] == "series" else { return nil }
+        return client.server
+            .appendingPathComponent(String(parts[0]))
+            .appendingPathComponent(client.username)
+            .appendingPathComponent(client.password)
+            .appendingPathComponent(String(parts[1]))
+    }
+
+    // MARK: - Mapping
+
+    static func categoryNames(_ categories: [XtreamClient.Category]) -> [String: String] {
+        var names: [String: String] = [:]
+        for category in categories {
+            if let id = category.categoryID?.value, let name = category.categoryName?.value {
+                names[id] = name
+            }
+        }
+        return names
+    }
+
+    static func movie(_ entry: Entry, _ categories: [String: String]) -> MediaItem? {
+        guard let id = entry.streamID?.value else { return nil }
+        let ext = entry.containerExtension?.value ?? "mp4"
+        return MediaItem(
+            id: "movie/\(id).\(ext)",
+            name: entry.name?.value ?? id,
+            kind: .movie,
+            subtitle: entry.year?.value,
+            group: entry.categoryID?.value.flatMap { categories[$0] },
+            imageURL: entry.streamIcon?.value.flatMap(URL.init(string:))
+        )
+    }
+
+    static func series(_ entry: Entry, _ categories: [String: String]) -> MediaItem? {
+        guard let id = entry.seriesID?.value else { return nil }
+        return MediaItem(
+            id: "series:\(id)",
+            name: entry.name?.value ?? id,
+            kind: .series,
+            subtitle: entry.year?.value,
+            group: entry.categoryID?.value.flatMap { categories[$0] },
+            imageURL: entry.cover?.value.flatMap(URL.init(string:))
+        )
+    }
+
+    static func episodes(_ info: SeriesInfo, fallbackImage: URL?) -> [MediaItem] {
+        info.episodes
+            .sorted { (Int($0.key) ?? 0) < (Int($1.key) ?? 0) }
+            .flatMap { season, episodes in
+                episodes.compactMap { episode -> MediaItem? in
+                    guard let id = episode.id?.value else { return nil }
+                    let ext = episode.containerExtension?.value ?? "mp4"
+                    let number = episode.episodeNum?.value ?? ""
+                    return MediaItem(
+                        id: "series/\(id).\(ext)",
+                        name: episode.title?.value ?? String(localized: "Episode \(number)"),
+                        kind: .episode,
+                        subtitle: "S\(season) · E\(number)",
+                        group: nil,
+                        imageURL: episode.info?.movieImage?.value.flatMap(URL.init(string:)) ?? fallbackImage
+                    )
+                }
+            }
+    }
+
+    // MARK: - Wire types
+
+    struct Entry: Decodable {
+        let streamID: LooseString?
+        let seriesID: LooseString?
+        let name: LooseString?
+        let streamIcon: LooseString?
+        let cover: LooseString?
+        let categoryID: LooseString?
+        let containerExtension: LooseString?
+        let year: LooseString?
+
+        enum CodingKeys: String, CodingKey {
+            case streamID = "stream_id"
+            case seriesID = "series_id"
+            case name
+            case streamIcon = "stream_icon"
+            case cover
+            case categoryID = "category_id"
+            case containerExtension = "container_extension"
+            case year
+        }
+    }
+
+    struct SeriesInfo: Decodable {
+        struct Episode: Decodable {
+            struct Info: Decodable {
+                let movieImage: LooseString?
+                enum CodingKeys: String, CodingKey { case movieImage = "movie_image" }
+            }
+
+            let id: LooseString?
+            let episodeNum: LooseString?
+            let title: LooseString?
+            let containerExtension: LooseString?
+            let info: Info?
+
+            enum CodingKeys: String, CodingKey {
+                case id
+                case episodeNum = "episode_num"
+                case title
+                case containerExtension = "container_extension"
+                case info
+            }
+        }
+
+        /// Season number → episodes. Panels send either an object keyed by season or an array of seasons.
+        let episodes: [String: [Episode]]
+
+        enum CodingKeys: String, CodingKey { case episodes }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            if let bySeason = try? container.decode([String: [Episode]].self, forKey: .episodes) {
+                episodes = bySeason
+            } else if let list = try? container.decode([[Episode]].self, forKey: .episodes) {
+                episodes = Dictionary(uniqueKeysWithValues: list.enumerated().map { (String($0.offset + 1), $0.element) })
+            } else {
+                episodes = [:]
+            }
         }
     }
 }

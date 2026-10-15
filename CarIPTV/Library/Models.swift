@@ -26,6 +26,10 @@ struct Source: Codable, Hashable, Identifiable, Sendable {
         case m3uFile(fileName: String)
         /// Password lives in the Keychain under the source id.
         case xtream(server: URL, username: String)
+        /// Jellyfin or Emby; the access token lives in the Keychain under the source id.
+        case mediaServer(flavor: JellyfinClient.Flavor, server: URL, userID: String)
+        /// Plex server; the server token lives in the Keychain under the source id.
+        case plex(serverID: String, connections: [URL])
     }
 
     var id: UUID
@@ -39,12 +43,30 @@ struct Source: Codable, Hashable, Identifiable, Sendable {
         case .m3uURL: String(localized: "M3U link")
         case .m3uFile: String(localized: "M3U file")
         case .xtream: String(localized: "Xtream Codes")
+        case .mediaServer(let flavor, _, _): flavor.title
+        case .plex: "Plex"
         }
     }
 
+    /// M3U links and Xtream re-download their channel lists; servers are browsed live.
     var canRefresh: Bool {
-        if case .m3uFile = kind { return false }
-        return true
+        switch kind {
+        case .m3uURL, .xtream: true
+        case .m3uFile, .mediaServer, .plex: false
+        }
+    }
+
+    /// "1 channel", "12 channels".
+    static func channelCountText(_ count: Int) -> String {
+        String(AttributedString(localized: "^[\(count) channel](inflect: true)").characters)
+    }
+
+    /// Has posters to browse: Xtream movies and series, Jellyfin, Emby, Plex.
+    var hasMediaLibraries: Bool {
+        switch kind {
+        case .xtream, .mediaServer, .plex: true
+        case .m3uURL, .m3uFile: false
+        }
     }
 }
 
@@ -75,14 +97,39 @@ struct PlayableMedia: Hashable, Sendable {
         self.libraryItem = libraryItem
     }
 
+    init(_ item: MediaItem, sourceID: UUID, group: String?) {
+        self.init(LibraryItem(item, sourceID: sourceID, group: group))
+    }
+
     init(_ item: LibraryItem) {
         self.init(
             title: item.channel.name,
             subtitle: item.channel.group,
             url: item.channel.url,
             artwork: item.channel.logo,
-            isLive: true,
+            // Server posters are films and episodes; playlist channels are live.
+            isLive: InternalURL.parse(item.channel.url) == nil,
             libraryItem: item
         )
     }
+}
+
+extension LibraryItem {
+    /// A server poster as a library entry; its URL is internal and resolves to a stream at play time.
+    init(_ item: MediaItem, sourceID: UUID, group: String?) {
+        self.init(
+            sourceID: sourceID,
+            channel: Channel(
+                id: "item:\(item.id)",
+                name: item.name,
+                url: InternalURL.item(sourceID: sourceID, itemID: item.id),
+                group: [group, item.subtitle].compactMap { $0 }.joined(separator: " · ").nilIfEmpty,
+                logo: item.imageURL
+            )
+        )
+    }
+}
+
+extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

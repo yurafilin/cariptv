@@ -33,6 +33,7 @@ final class LibraryStore {
     /// Channels per source, loaded from disk in the background at launch.
     private(set) var channels: [UUID: [Channel]] = [:]
 
+    @ObservationIgnored private var plexConnections: [UUID: URL] = [:]
     @ObservationIgnored private let directory: URL
     @ObservationIgnored private let videosDirectory: URL
 
@@ -107,6 +108,32 @@ final class LibraryStore {
         store(source, channels: parsed)
     }
 
+    func addMediaServer(flavor: JellyfinClient.Flavor, server: String, username: String, password: String, name: String?) async throws {
+        guard let serverURL = JellyfinClient.normalizedServer(server) else { throw MediaServerError.invalidServer }
+        let session = try await JellyfinClient.authenticate(server: serverURL, flavor: flavor, username: username, password: password)
+        let source = Source(
+            id: UUID(),
+            name: Self.cleanName(name) ?? session.serverName ?? serverURL.host() ?? flavor.title,
+            kind: .mediaServer(flavor: flavor, server: serverURL, userID: session.userID),
+            channelCount: 0,
+            updatedAt: .now
+        )
+        Keychain.set(session.token, for: source.id.uuidString)
+        store(source, channels: [])
+    }
+
+    func addPlex(_ server: PlexClient.Server) {
+        let source = Source(
+            id: UUID(),
+            name: server.name,
+            kind: .plex(serverID: server.id, connections: server.connections),
+            channelCount: 0,
+            updatedAt: .now
+        )
+        Keychain.set(server.accessToken, for: source.id.uuidString)
+        store(source, channels: [])
+    }
+
     func refresh(_ source: Source) async throws {
         let parsed: [Channel]
         switch source.kind {
@@ -115,7 +142,7 @@ final class LibraryStore {
         case .xtream(let server, let username):
             guard let password = Keychain.get(source.id.uuidString) else { throw LibraryError.missingPassword }
             parsed = try await XtreamClient(server: server, username: username, password: password).liveChannels()
-        case .m3uFile:
+        case .m3uFile, .mediaServer, .plex:
             return
         }
         var updated = source
@@ -134,6 +161,46 @@ final class LibraryStore {
         write(sources, "sources.json")
         write(favorites, "favorites.json")
         write(recent, "recent.json")
+    }
+
+    // MARK: - Media servers
+
+    /// The poster catalog of a source: Xtream movies and series, Jellyfin, Emby or Plex.
+    func mediaServer(for source: Source) -> MediaServer? {
+        guard let secret = Keychain.get(source.id.uuidString) else { return nil }
+        switch source.kind {
+        case .xtream(let server, let username):
+            return XtreamCatalog(client: XtreamClient(server: server, username: username, password: secret))
+        case .mediaServer(let flavor, let server, let userID):
+            return JellyfinClient(server: server, flavor: flavor, token: secret, userID: userID)
+        case .plex(_, let connections):
+            return PlexClient(sourceID: source.id, connections: connections, token: secret, preferred: plexConnections[source.id])
+        case .m3uURL, .m3uFile:
+            return nil
+        }
+    }
+
+    /// Plex servers list several addresses (home network, internet, relay); remember the one that answers.
+    func preparePlex(_ source: Source) async {
+        guard case .plex(_, let connections) = source.kind, plexConnections[source.id] == nil,
+              let token = Keychain.get(source.id.uuidString) else { return }
+        if let reachable = await PlexClient.reachableConnection(connections, token: token) {
+            plexConnections[source.id] = reachable
+        }
+    }
+
+    /// Internal item and image URLs → real URLs with credentials; any other URL unchanged.
+    func resolvedURL(_ url: URL) -> URL {
+        guard let parsed = InternalURL.parse(url),
+              let source = sources.first(where: { $0.id == parsed.sourceID }),
+              let server = mediaServer(for: source) else { return url }
+        if parsed.scheme == InternalURL.itemScheme {
+            return server.playbackURL(itemID: parsed.value) ?? url
+        }
+        if let plex = server as? PlexClient {
+            return plex.imageURL(path: parsed.value) ?? url
+        }
+        return url
     }
 
     // MARK: - Favorites and recents

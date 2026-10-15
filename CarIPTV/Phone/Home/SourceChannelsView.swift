@@ -24,7 +24,7 @@ struct SourceChannelsView: View {
         List {
             if groups.count > 1 {
                 Section {
-                    groupPicker
+                    GroupChips(groups: groups, selection: $group)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }
@@ -89,35 +89,6 @@ struct SourceChannelsView: View {
             Text(errorMessage ?? "")
         }
         .miniPlayerInset()
-    }
-
-    private var groupPicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                chip(String(localized: "All"), value: nil)
-                ForEach(groups, id: \.self) { name in
-                    chip(name, value: name)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 4)
-        }
-    }
-
-    private func chip(_ title: String, value: String?) -> some View {
-        let isSelected = group == value
-        return Button {
-            group = value
-        } label: {
-            Text(title)
-                .font(.subheadline.weight(.medium))
-                .lineLimit(1)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .foregroundStyle(isSelected ? Color.black : Color.primary)
-                .background(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary), in: Capsule())
-        }
-        .buttonStyle(.plain)
     }
 
     private func refresh() async {

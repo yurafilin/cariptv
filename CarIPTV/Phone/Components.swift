@@ -30,7 +30,7 @@ struct ChannelLogo: View {
     var size: CGFloat = 44
 
     var body: some View {
-        AsyncImage(url: url) { phase in
+        AsyncImage(url: url.map(LibraryStore.shared.resolvedURL)) { phase in
             if let image = phase.image {
                 image.resizable().scaledToFit().padding(4)
             } else {

@@ -6,6 +6,9 @@ struct CarIPTVApp: App {
 
     init() {
         MirrorReceiver.shared.start()
+        #if DEBUG
+        DebugSources.addIfRequested()
+        #endif
     }
 
     var body: some Scene {
