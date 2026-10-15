@@ -11,6 +11,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		CA0000000000000000000143 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CA0000000000000000000101;
+			remoteInfo = CarIPTV;
+		};
 		CA0000000000000000000141 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = CA0000000000000000000001 /* Project object */;
@@ -35,11 +42,17 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		CA0000000000000000000023 /* CarIPTVTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CarIPTVTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA0000000000000000000021 /* CarIPTV.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CarIPTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA0000000000000000000022 /* ScreenRelay.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ScreenRelay.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		CA0000000000000000000015 /* CarIPTVTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = CarIPTVTests;
+			sourceTree = "<group>";
+		};
 		CA0000000000000000000011 /* CarIPTV */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = CarIPTV;
@@ -63,6 +76,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		CA0000000000000000000152 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CA0000000000000000000112 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -86,6 +106,7 @@
 				CA0000000000000000000011 /* CarIPTV */,
 				CA0000000000000000000012 /* ScreenRelay */,
 				CA0000000000000000000013 /* Shared */,
+				CA0000000000000000000015 /* CarIPTVTests */,
 				CA0000000000000000000014 /* Config */,
 				CA0000000000000000000003 /* Products */,
 			);
@@ -96,6 +117,7 @@
 			children = (
 				CA0000000000000000000021 /* CarIPTV.app */,
 				CA0000000000000000000022 /* ScreenRelay.appex */,
+				CA0000000000000000000023 /* CarIPTVTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -103,6 +125,29 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		CA0000000000000000000103 /* CarIPTVTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CA0000000000000000000204 /* Build configuration list for PBXNativeTarget "CarIPTVTests" */;
+			buildPhases = (
+				CA0000000000000000000151 /* Sources */,
+				CA0000000000000000000152 /* Frameworks */,
+				CA0000000000000000000153 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CA0000000000000000000144 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				CA0000000000000000000015 /* CarIPTVTests */,
+			);
+			name = CarIPTVTests;
+			packageProductDependencies = (
+			);
+			productName = CarIPTVTests;
+			productReference = CA0000000000000000000023 /* CarIPTVTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		CA0000000000000000000101 /* CarIPTV */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = CA0000000000000000000202 /* Build configuration list for PBXNativeTarget "CarIPTV" */;
@@ -167,6 +212,10 @@
 					CA0000000000000000000102 = {
 						CreatedOnToolsVersion = 26.3;
 					};
+					CA0000000000000000000103 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = CA0000000000000000000101;
+					};
 				};
 			};
 			buildConfigurationList = CA0000000000000000000201 /* Build configuration list for PBXProject "CarIPTV" */;
@@ -185,11 +234,19 @@
 			targets = (
 				CA0000000000000000000101 /* CarIPTV */,
 				CA0000000000000000000102 /* ScreenRelay */,
+				CA0000000000000000000103 /* CarIPTVTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		CA0000000000000000000153 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CA0000000000000000000113 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -207,6 +264,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		CA0000000000000000000151 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CA0000000000000000000111 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -224,6 +288,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		CA0000000000000000000144 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CA0000000000000000000101 /* CarIPTV */;
+			targetProxy = CA0000000000000000000143 /* PBXContainerItemProxy */;
+		};
 		CA0000000000000000000142 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = CA0000000000000000000102 /* ScreenRelay */;
@@ -232,6 +301,38 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		CA0000000000000000000241 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = weappico.cariptv.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CarIPTV.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CarIPTV";
+			};
+			name = Debug;
+		};
+		CA0000000000000000000242 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = weappico.cariptv.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CarIPTV.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CarIPTV";
+			};
+			name = Release;
+		};
 		CA0000000000000000000211 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -367,6 +468,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -395,6 +497,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -456,6 +559,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		CA0000000000000000000204 /* Build configuration list for PBXNativeTarget "CarIPTVTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CA0000000000000000000241 /* Debug */,
+				CA0000000000000000000242 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		CA0000000000000000000201 /* Build configuration list for PBXProject "CarIPTV" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

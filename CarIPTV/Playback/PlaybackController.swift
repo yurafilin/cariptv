@@ -1,0 +1,186 @@
+import AVFoundation
+import MediaPlayer
+import Observation
+
+/// The one player of the app. The phone and the car display attach their own layers to `player`;
+/// the car attaches only while the car allows video, so otherwise the stream plays as audio.
+@MainActor @Observable
+final class PlaybackController {
+    static let shared = PlaybackController()
+
+    enum State: Equatable {
+        case idle
+        case loading
+        case playing
+        case paused
+        case failed(String)
+    }
+
+    let player = AVPlayer()
+    private(set) var media: PlayableMedia?
+    private(set) var state: State = .idle
+
+    @ObservationIgnored private var itemObservation: NSKeyValueObservation?
+    @ObservationIgnored private var timeControlObservation: NSKeyValueObservation?
+
+    private init() {
+        timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
+            let status = player.timeControlStatus
+            Task { @MainActor in PlaybackController.shared.timeControlChanged(status) }
+        }
+        setUpRemoteCommands()
+    }
+
+    var isActive: Bool { media != nil }
+
+    func play(_ media: PlayableMedia) {
+        activateAudioSession()
+        self.media = media
+        state = .loading
+        Log.playback.info("play \(media.url.absoluteString, privacy: .private)")
+
+        let item = AVPlayerItem(url: media.url)
+        itemObservation = item.observe(\.status, options: [.new]) { item, _ in
+            let status = item.status
+            let message = item.error?.localizedDescription
+            Task { @MainActor in PlaybackController.shared.itemStatusChanged(status, message: message) }
+        }
+        player.replaceCurrentItem(with: item)
+        player.play()
+
+        if let libraryItem = media.libraryItem {
+            LibraryStore.shared.markPlayed(libraryItem)
+        }
+        updateNowPlaying()
+    }
+
+    func play(_ item: LibraryItem) {
+        play(PlayableMedia(item))
+    }
+
+    func resume() {
+        guard media != nil else { return }
+        player.play()
+    }
+
+    func pause() {
+        player.pause()
+    }
+
+    func togglePause() {
+        player.timeControlStatus == .paused ? resume() : pause()
+    }
+
+    func stop() {
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        itemObservation = nil
+        media = nil
+        state = .idle
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    func seek(to seconds: Double) {
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
+    }
+
+    /// Position and duration in seconds; duration is `nil` for live streams.
+    var position: (elapsed: Double, duration: Double?) {
+        let elapsed = player.currentTime().seconds
+        let duration = player.currentItem?.duration.seconds
+        return (elapsed.isFinite ? elapsed : 0, duration.flatMap { $0.isFinite ? $0 : nil })
+    }
+
+    // MARK: - Observation
+
+    private func itemStatusChanged(_ status: AVPlayerItem.Status, message: String?) {
+        switch status {
+        case .failed:
+            Log.playback.error("item failed: \(message ?? "unknown")")
+            state = .failed(message ?? String(localized: "This stream can't be played."))
+        case .readyToPlay:
+            if state == .loading, player.timeControlStatus == .playing {
+                state = .playing
+            }
+        default:
+            break
+        }
+        updateNowPlaying()
+    }
+
+    private func timeControlChanged(_ status: AVPlayer.TimeControlStatus) {
+        guard media != nil else { return }
+        if case .failed = state { return }
+        switch status {
+        case .playing: state = .playing
+        case .paused: state = .paused
+        case .waitingToPlayAtSpecifiedRate: state = .loading
+        @unknown default: break
+        }
+        updateNowPlaying()
+    }
+
+    // MARK: - System integration
+
+    private func activateAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
+        } catch {
+            Log.playback.error("audio session: \(error.localizedDescription)")
+        }
+    }
+
+    private func updateNowPlaying() {
+        guard let media else { return }
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: media.title,
+            MPNowPlayingInfoPropertyIsLiveStream: media.isLive,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
+            MPNowPlayingInfoPropertyPlaybackRate: state == .playing ? 1.0 : 0.0,
+        ]
+        if let subtitle = media.subtitle {
+            info[MPMediaItemPropertyArtist] = subtitle
+        }
+        let position = position
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = position.elapsed
+        if let duration = position.duration {
+            info[MPMediaItemPropertyPlaybackDuration] = duration
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func setUpRemoteCommands() {
+        let center = MPRemoteCommandCenter.shared()
+        center.playCommand.addTarget { _ in
+            MainActor.assumeIsolated { PlaybackController.shared.resume() }
+            return .success
+        }
+        center.pauseCommand.addTarget { _ in
+            MainActor.assumeIsolated { PlaybackController.shared.pause() }
+            return .success
+        }
+        center.togglePlayPauseCommand.addTarget { _ in
+            MainActor.assumeIsolated { PlaybackController.shared.togglePause() }
+            return .success
+        }
+        center.stopCommand.addTarget { _ in
+            MainActor.assumeIsolated { PlaybackController.shared.stop() }
+            return .success
+        }
+    }
+}
+
+extension PlaybackController.State {
+    var message: String {
+        switch self {
+        case .idle: String(localized: "Not playing")
+        case .loading: String(localized: "Loading…")
+        case .playing: String(localized: "Playing")
+        case .paused: String(localized: "Paused")
+        case .failed(let message): message
+        }
+    }
+}

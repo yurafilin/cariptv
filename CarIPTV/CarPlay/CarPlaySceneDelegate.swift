@@ -1,14 +1,19 @@
 import CarPlay
 import UIKit
 
-/// CarPlay scene. When CarPlay hands the app a window of its own, the mirrored screen is drawn
-/// there by `CarMirrorViewController`; the list template carries the status either way.
+/// CarPlay scene: tabs with favorites, recent channels and the screen status.
+/// When CarPlay hands the app a window of its own, video is drawn there by `CarScreenViewController`.
 final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     private var interfaceController: CPInterfaceController?
     private var window: CPWindow?
     private var sessionConfiguration: CPSessionConfiguration?
-    private var observer: StateObserver?
-    private let statusItem = CPListItem(text: String(localized: "Screen mirroring"), detailText: nil)
+    private var observers: [StateObserver] = []
+
+    private let favoritesTemplate = CPListTemplate(title: String(localized: "Favorites"), sections: [])
+    private let recentTemplate = CPListTemplate(title: String(localized: "Recent"), sections: [])
+    private let screenTemplate = CPListTemplate(title: String(localized: "Screen"), sections: [])
+    private let mirroringItem = CPListItem(text: String(localized: "Screen mirroring"), detailText: nil)
+    private let playingItem = CPListItem(text: String(localized: "Now playing"), detailText: nil)
 
     // MARK: - Connection
 
@@ -52,33 +57,71 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         Log.carplay.info("car: connected window=\(window != nil) supportsVideoPlayback=\(String(describing: supportsVideo)) limited=\(limited.rawValue)")
 
         if let window {
-            window.rootViewController = CarMirrorViewController()
+            window.rootViewController = CarScreenViewController()
             self.window = window
         }
         CarState.shared.connect(hasWindow: window != nil, supportsVideoPlayback: supportsVideo, limitedInterfaces: limited)
 
-        let template = CPListTemplate(title: "CarIPTV", sections: [CPListSection(items: [statusItem])])
-        interfaceController.setRootTemplate(template, animated: false, completion: nil)
-        observer = StateObserver { [weak self] in
-            self?.updateStatusItem()
-        }
+        favoritesTemplate.tabTitle = String(localized: "Favorites")
+        favoritesTemplate.tabImage = UIImage(systemName: "heart")
+        favoritesTemplate.emptyViewTitleVariants = [String(localized: "No favorites yet")]
+        favoritesTemplate.emptyViewSubtitleVariants = [String(localized: "Touch and hold a channel on your iPhone to add it.")]
+        recentTemplate.tabTitle = String(localized: "Recent")
+        recentTemplate.tabImage = UIImage(systemName: "clock")
+        recentTemplate.emptyViewTitleVariants = [String(localized: "Nothing played yet")]
+        screenTemplate.tabTitle = String(localized: "Screen")
+        screenTemplate.tabImage = UIImage(systemName: "rectangle.on.rectangle")
+        screenTemplate.updateSections([CPListSection(items: [playingItem, mirroringItem])])
+
+        let tabs = CPTabBarTemplate(templates: [favoritesTemplate, recentTemplate, screenTemplate])
+        interfaceController.setRootTemplate(tabs, animated: false, completion: nil)
+
+        observers = [
+            StateObserver { [weak self] in self?.updateList(self?.favoritesTemplate, LibraryStore.shared.favorites) },
+            StateObserver { [weak self] in self?.updateList(self?.recentTemplate, LibraryStore.shared.recent) },
+            StateObserver { [weak self] in self?.updateScreenItems() },
+        ]
         MirrorReceiver.shared.start()
+        CastReceiver.shared.setActive(true, for: .carPlay)
     }
 
     private func disconnect() {
         Log.carplay.info("car: disconnected")
-        observer?.cancel()
-        observer = nil
+        observers.forEach { $0.cancel() }
+        observers = []
         window?.rootViewController = nil
         window = nil
         interfaceController = nil
         sessionConfiguration = nil
         CarState.shared.disconnect()
+        CastReceiver.shared.setActive(false, for: .carPlay)
     }
 
-    private func updateStatusItem() {
+    // MARK: - Content
+
+    private func updateList(_ template: CPListTemplate?, _ items: [LibraryItem]) {
+        guard let template else { return }
+        let limit = min(items.count, CPListTemplate.maximumItemCount)
+        let rows = items.prefix(limit).map { item -> CPListItem in
+            let row = CPListItem(text: item.channel.name, detailText: item.channel.group, image: UIImage(systemName: "tv"))
+            row.handler = { [weak self] _, completion in
+                PlaybackController.shared.play(item)
+                self?.showNowPlaying()
+                completion()
+            }
+            return row
+        }
+        template.updateSections([CPListSection(items: Array(rows))])
+    }
+
+    private func updateScreenItems() {
         let availability = CarState.shared.videoAvailability
         let mirror = MirrorStatus.shared
+        let playback = PlaybackController.shared
+
+        playingItem.setText(playback.media?.title ?? String(localized: "Nothing playing"))
+        playingItem.setDetailText(playback.isActive ? playback.state.message : nil)
+
         let detail: String
         if availability != .allowed {
             detail = availability.message
@@ -87,7 +130,16 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         } else {
             detail = String(localized: "Start mirroring on your iPhone")
         }
-        statusItem.setDetailText(detail)
+        mirroringItem.setDetailText(detail)
+    }
+
+    private func showNowPlaying() {
+        guard let interfaceController, interfaceController.topTemplate !== CPNowPlayingTemplate.shared else { return }
+        interfaceController.pushTemplate(CPNowPlayingTemplate.shared, animated: true) { _, error in
+            if let error {
+                Log.carplay.error("car: now playing push failed \(error.localizedDescription)")
+            }
+        }
     }
 }
 

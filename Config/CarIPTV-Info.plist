@@ -21,5 +21,28 @@
 			</array>
 		</dict>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Playlists, Xtream panels and streams are user-provided and often plain http. -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>CarIPTV uses your local network to receive videos cast from other apps.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>snssdk1233</string>
+		<string>snssdk1128</string>
+		<string>bilibili</string>
+		<string>iqiyi</string>
+		<string>youku</string>
+		<string>tenvideo</string>
+		<string>imgotv</string>
+		<string>kwai</string>
+	</array>
 </dict>
 </plist>

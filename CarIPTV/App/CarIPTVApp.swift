@@ -10,7 +10,7 @@ struct CarIPTVApp: App {
 
     var body: some Scene {
         WindowGroup {
-            HomeView()
+            RootView()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
