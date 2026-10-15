@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	Device builds. CarPlay keys (com.apple.developer.carplay-audio, com.apple.developer.carplay-video)
+	go here only after Apple grants them to team JPN556JCX4: signing fails on an entitlement
+	the provisioning profile does not carry. Simulator builds use CarIPTV-Simulator.entitlements.
+-->
+<plist version="1.0">
+<dict/>
+</plist>
