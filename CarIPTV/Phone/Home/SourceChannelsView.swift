@@ -31,7 +31,9 @@ struct SourceChannelsView: View {
             }
             Section {
                 ForEach(filtered) { channel in
-                    ChannelRow(item: LibraryItem(sourceID: source.id, channel: channel))
+                    ChannelRow(item: LibraryItem(sourceID: source.id, channel: channel)) {
+                        filtered.map { LibraryItem(sourceID: source.id, channel: $0) }
+                    }
                 }
             }
         }

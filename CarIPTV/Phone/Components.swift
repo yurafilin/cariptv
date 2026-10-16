@@ -53,12 +53,16 @@ struct ChannelLogo: View {
 /// A playable channel. Tap plays, touch and hold or swipe toggles the favorite.
 struct ChannelRow: View {
     let item: LibraryItem
+    /// The list this row belongs to, for next/previous; built only when the row is tapped.
+    var queue: () -> [LibraryItem] = { [] }
+
+    @State private var nowShowing: Programme?
 
     var body: some View {
         let store = LibraryStore.shared
         let isFavorite = store.isFavorite(item)
         Button {
-            AppRouter.shared.play(item)
+            AppRouter.shared.play(item, queue: queue())
         } label: {
             HStack(spacing: 12) {
                 ChannelLogo(url: item.channel.logo, name: item.channel.name)
@@ -66,7 +70,12 @@ struct ChannelRow: View {
                     Text(item.channel.name)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    if let group = item.channel.group {
+                    if let nowShowing {
+                        Text("Now: \(nowShowing.title)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else if let group = item.channel.group {
                         Text(group)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -89,6 +98,11 @@ struct ChannelRow: View {
         .swipeActions(edge: .trailing) {
             favoriteButton(isFavorite)
                 .tint(.accentColor)
+        }
+        .task(id: item.id) {
+            // Only Xtream live channels have a guide; their channel id is the stream id.
+            guard !item.isPoster, let client = LibraryStore.shared.xtreamClient(for: item.sourceID) else { return }
+            nowShowing = await ProgramGuide.shared.nowNext(client: client, streamID: item.channel.id).now
         }
     }
 

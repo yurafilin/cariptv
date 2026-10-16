@@ -105,7 +105,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let rows = items.prefix(limit).map { item -> CPListItem in
             let row = CPListItem(text: item.channel.name, detailText: item.channel.group, image: UIImage(systemName: "tv"))
             row.handler = { [weak self] _, completion in
-                PlaybackController.shared.play(item)
+                PlaybackController.shared.play(item, queue: items)
                 self?.showNowPlaying()
                 completion()
             }

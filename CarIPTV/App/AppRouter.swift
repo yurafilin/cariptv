@@ -18,12 +18,12 @@ final class AppRouter {
 
     private init() {}
 
-    func play(_ media: PlayableMedia) {
-        PlaybackController.shared.play(media)
+    func play(_ media: PlayableMedia, queue: [LibraryItem] = []) {
+        PlaybackController.shared.play(media, queue: queue)
         isPlayerPresented = true
     }
 
-    func play(_ item: LibraryItem) {
-        play(PlayableMedia(item))
+    func play(_ item: LibraryItem, queue: [LibraryItem] = []) {
+        play(PlayableMedia(item), queue: queue)
     }
 }

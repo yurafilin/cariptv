@@ -183,7 +183,7 @@ struct MediaItemsView: View {
     private func cell<CellLabel: View>(for item: MediaItem, @ViewBuilder label: () -> CellLabel) -> some View {
         if item.isPlayable {
             Button {
-                AppRouter.shared.play(PlayableMedia(item, sourceID: source.id, group: groupName(for: item)))
+                AppRouter.shared.play(PlayableMedia(item, sourceID: source.id, group: groupName(for: item)), queue: episodeQueue)
             } label: {
                 label()
             }
@@ -205,6 +205,12 @@ struct MediaItemsView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    /// Episodes step to the next episode; movies in a library stand alone.
+    private var episodeQueue: [LibraryItem] {
+        guard case .children = content else { return [] }
+        return items.filter(\.isPlayable).map { LibraryItem($0, sourceID: source.id, group: groupName(for: $0)) }
     }
 
     /// Episodes are grouped under their series name; movies under their category.

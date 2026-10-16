@@ -45,7 +45,7 @@ struct FavoritesView: View {
             )
         } else {
             List(store.favorites) { item in
-                ChannelRow(item: item)
+                ChannelRow(item: item, queue: { store.favorites })
             }
         }
     }

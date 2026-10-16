@@ -19,11 +19,17 @@ final class PlaybackController {
     let player = AVPlayer()
     private(set) var media: PlayableMedia?
     private(set) var state: State = .idle
+    /// The list the current item was started from: next and previous step through it.
+    private(set) var queue: [LibraryItem] = []
 
     @ObservationIgnored private var itemObservation: NSKeyValueObservation?
     @ObservationIgnored private var timeControlObservation: NSKeyValueObservation?
 
     private init() {
+        // CarPlay video apps must support AirPlay video: in cars that show video the system
+        // routes the stream to the car display.
+        player.allowsExternalPlayback = true
+        player.usesExternalPlaybackWhileExternalScreenIsActive = true
         timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
             let status = player.timeControlStatus
             Task { @MainActor in PlaybackController.shared.timeControlChanged(status) }
@@ -33,8 +39,13 @@ final class PlaybackController {
 
     var isActive: Bool { media != nil }
 
-    func play(_ media: PlayableMedia) {
+    var canStep: Bool { queue.count > 1 && media?.libraryItem != nil }
+
+    /// Plays `media`; `queue` is the list it came from (channels of a group, favorites, episodes).
+    func play(_ media: PlayableMedia, queue: [LibraryItem] = []) {
         activateAudioSession()
+        self.queue = queue.count > 1 ? queue : []
+        updateStepCommands()
         self.media = media
         state = .loading
         Log.playback.info("play \(media.url.absoluteString, privacy: .private)")
@@ -58,8 +69,21 @@ final class PlaybackController {
         updateNowPlaying()
     }
 
-    func play(_ item: LibraryItem) {
-        play(PlayableMedia(item))
+    func play(_ item: LibraryItem, queue: [LibraryItem] = []) {
+        play(PlayableMedia(item), queue: queue)
+    }
+
+    /// Next (+1) or previous (-1) item of the queue, wrapping around.
+    func step(_ offset: Int) {
+        guard canStep, let current = media?.libraryItem,
+              let index = Self.index(of: current.id, in: queue.map(\.id), offset: offset) else { return }
+        play(PlayableMedia(queue[index]), queue: queue)
+    }
+
+    nonisolated static func index(of id: String, in ids: [String], offset: Int) -> Int? {
+        guard !ids.isEmpty, let current = ids.firstIndex(of: id) else { return nil }
+        let count = ids.count
+        return ((current + offset) % count + count) % count
     }
 
     func resume() {
@@ -185,6 +209,22 @@ final class PlaybackController {
             MainActor.assumeIsolated { PlaybackController.shared.stop() }
             return .success
         }
+        // Steering-wheel and lock-screen next/previous switch channels.
+        center.nextTrackCommand.addTarget { _ in
+            MainActor.assumeIsolated { PlaybackController.shared.step(1) }
+            return .success
+        }
+        center.previousTrackCommand.addTarget { _ in
+            MainActor.assumeIsolated { PlaybackController.shared.step(-1) }
+            return .success
+        }
+        updateStepCommands()
+    }
+
+    private func updateStepCommands() {
+        let center = MPRemoteCommandCenter.shared()
+        center.nextTrackCommand.isEnabled = queue.count > 1
+        center.previousTrackCommand.isEnabled = queue.count > 1
     }
 }
 

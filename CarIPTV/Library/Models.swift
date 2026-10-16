@@ -115,6 +115,9 @@ struct PlayableMedia: Hashable, Sendable {
 }
 
 extension LibraryItem {
+    /// Films and episodes from servers, as opposed to live channels from playlists.
+    var isPoster: Bool { InternalURL.parse(channel.url) != nil }
+
     /// A server poster as a library entry; its URL is internal and resolves to a stream at play time.
     init(_ item: MediaItem, sourceID: UUID, group: String?) {
         self.init(

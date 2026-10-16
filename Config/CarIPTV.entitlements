@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-	Device builds. CarPlay keys (com.apple.developer.carplay-audio, com.apple.developer.carplay-video)
-	go here only after Apple grants them to team JPN556JCX4: signing fails on an entitlement
-	the provisioning profile does not carry. Simulator builds use CarIPTV-Simulator.entitlements.
+	Device builds. CarPlay Video was granted to team JPN556JCX4 on 2026-10-16 (Apple case 22905383).
+	Apple does not support CarPlay Audio and CarPlay Video in the same app; keep exactly one CarPlay key.
+	The capability must also be enabled on the App ID weappico.cariptv, or signing fails.
 -->
 <plist version="1.0">
-<dict/>
+<dict>
+	<key>com.apple.developer.carplay-video</key>
+	<true/>
+</dict>
 </plist>

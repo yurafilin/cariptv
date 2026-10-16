@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct CarIPTVApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
     init() {

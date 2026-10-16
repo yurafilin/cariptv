@@ -180,6 +180,14 @@ final class LibraryStore {
         }
     }
 
+    /// The Xtream login of a source, for the programme guide of its live channels.
+    func xtreamClient(for sourceID: UUID) -> XtreamClient? {
+        guard let source = sources.first(where: { $0.id == sourceID }),
+              case .xtream(let server, let username) = source.kind,
+              let password = Keychain.get(source.id.uuidString) else { return nil }
+        return XtreamClient(server: server, username: username, password: password)
+    }
+
     /// Plex servers list several addresses (home network, internet, relay); remember the one that answers.
     func preparePlex(_ source: Source) async {
         guard case .plex(_, let connections) = source.kind, plexConnections[source.id] == nil,

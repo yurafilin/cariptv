@@ -3,6 +3,7 @@ import SwiftUI
 /// Sources and their channels, recents, and search across everything.
 struct HomeView: View {
     @State private var query = ""
+    @State private var isVoiceSearching = false
 
     var body: some View {
         let store = LibraryStore.shared
@@ -25,12 +26,24 @@ struct HomeView: View {
             .navigationTitle("Home")
             .searchable(text: $query, prompt: "Search channels")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        isVoiceSearching = true
+                    } label: {
+                        Label("Voice Search", systemImage: "mic")
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         AppRouter.shared.isAddSourcePresented = true
                     } label: {
                         Label("Add a Source", systemImage: "plus")
                     }
+                }
+            }
+            .sheet(isPresented: $isVoiceSearching) {
+                VoiceSearchSheet { text in
+                    query = text
                 }
             }
             .miniPlayerInset()
@@ -42,7 +55,7 @@ struct HomeView: View {
             if !store.recent.isEmpty {
                 Section("Recently played") {
                     ForEach(store.recent.prefix(5)) { item in
-                        ChannelRow(item: item)
+                        ChannelRow(item: item, queue: { store.recent })
                     }
                 }
             }
@@ -68,7 +81,7 @@ struct HomeView: View {
             ContentUnavailableView.search(text: query)
         } else {
             List(results) { item in
-                ChannelRow(item: item)
+                ChannelRow(item: item, queue: { results })
             }
         }
     }
