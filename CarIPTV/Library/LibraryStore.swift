@@ -61,31 +61,34 @@ final class LibraryStore {
         sources.contains { channels[$0.id] == nil }
     }
 
-    func addM3U(url: URL, name: String?) async throws {
-        let parsed = try await Self.downloadPlaylist(url)
+    func addM3U(url: URL, name: String?, guideURL: URL? = nil) async throws {
+        let playlist = try await Self.downloadPlaylist(url)
         let source = Source(
             id: UUID(),
             name: Self.cleanName(name) ?? url.host() ?? String(localized: "Playlist"),
             kind: .m3uURL(url),
-            channelCount: parsed.count,
-            updatedAt: .now
+            channelCount: playlist.channels.count,
+            updatedAt: .now,
+            guideURL: guideURL,
+            playlistGuideURL: playlist.guideURL
         )
-        store(source, channels: parsed)
+        store(source, channels: playlist.channels)
     }
 
     func importM3U(file url: URL) async throws {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         let data = try Data(contentsOf: url)
-        let parsed = try await Self.parsePlaylist(data)
+        let playlist = try await Self.parsePlaylist(data)
         let source = Source(
             id: UUID(),
             name: url.deletingPathExtension().lastPathComponent,
             kind: .m3uFile(fileName: url.lastPathComponent),
-            channelCount: parsed.count,
-            updatedAt: .now
+            channelCount: playlist.channels.count,
+            updatedAt: .now,
+            playlistGuideURL: playlist.guideURL
         )
-        store(source, channels: parsed)
+        store(source, channels: playlist.channels)
     }
 
     func addXtream(server: String, username: String, password: String, name: String?) async throws {
@@ -135,17 +138,19 @@ final class LibraryStore {
     }
 
     func refresh(_ source: Source) async throws {
+        var updated = source
         let parsed: [Channel]
         switch source.kind {
         case .m3uURL(let url):
-            parsed = try await Self.downloadPlaylist(url)
+            let playlist = try await Self.downloadPlaylist(url)
+            parsed = playlist.channels
+            updated.playlistGuideURL = playlist.guideURL
         case .xtream(let server, let username):
             guard let password = Keychain.get(source.id.uuidString) else { throw LibraryError.missingPassword }
             parsed = try await XtreamClient(server: server, username: username, password: password).liveChannels()
         case .m3uFile, .mediaServer, .plex:
             return
         }
-        var updated = source
         updated.channelCount = parsed.count
         updated.updatedAt = .now
         store(updated, channels: parsed)
@@ -158,6 +163,8 @@ final class LibraryStore {
         recent.removeAll { $0.sourceID == source.id }
         Keychain.remove(source.id.uuidString)
         try? FileManager.default.removeItem(at: channelsFile(source.id))
+        let id = source.id
+        Task { await ProgramGuide.shared.forget(id) }
         write(sources, "sources.json")
         write(favorites, "favorites.json")
         write(recent, "recent.json")
@@ -186,6 +193,26 @@ final class LibraryStore {
               case .xtream(let server, let username) = source.kind,
               let password = Keychain.get(source.id.uuidString) else { return nil }
         return XtreamClient(server: server, username: username, password: password)
+    }
+
+    /// Where the "now / next" of a live channel comes from: the Xtream panel, or the XMLTV
+    /// guide of an M3U source. `nil` for films, episodes and sources without a guide.
+    func guideLookup(for item: LibraryItem) -> ProgramGuide.Lookup? {
+        guard !item.isPoster, let source = sources.first(where: { $0.id == item.sourceID }) else { return nil }
+        switch source.kind {
+        case .xtream:
+            // Xtream live channel ids are stream ids.
+            return xtreamClient(for: source.id).map { .xtream($0, streamID: item.channel.id) }
+        case .m3uURL, .m3uFile:
+            // Channels still loading from disk: wait, or the guide would be read for nothing.
+            let all = channels(in: source)
+            guard let url = source.effectiveGuideURL, !all.isEmpty else { return nil }
+            // Favorites keep a copy of the channel from before `tvg-id` was stored; prefer the fresh one.
+            let channel = all.first { $0.id == item.channel.id } ?? item.channel
+            return .xmltv(sourceID: source.id, url: url, channel: channel, channels: all)
+        case .mediaServer, .plex:
+            return nil
+        }
     }
 
     /// Plex servers list several addresses (home network, internet, relay); remember the one that answers.
@@ -290,7 +317,7 @@ final class LibraryStore {
 
     // MARK: - Playlist loading
 
-    nonisolated static func downloadPlaylist(_ url: URL) async throws -> [Channel] {
+    nonisolated static func downloadPlaylist(_ url: URL) async throws -> M3UParser.Playlist {
         let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 60))
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw URLError(.badServerResponse)
@@ -298,14 +325,14 @@ final class LibraryStore {
         return try await parsePlaylist(data)
     }
 
-    nonisolated static func parsePlaylist(_ data: Data) async throws -> [Channel] {
+    nonisolated static func parsePlaylist(_ data: Data) async throws -> M3UParser.Playlist {
         let text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
         guard text.contains("#EXTINF") || text.contains("#EXTM3U") || text.contains("://") else {
             throw LibraryError.notAPlaylist
         }
-        let channels = M3UParser.parse(text)
-        guard !channels.isEmpty else { throw LibraryError.emptyPlaylist }
-        return channels
+        let playlist = M3UParser.parsePlaylist(text)
+        guard !playlist.channels.isEmpty else { throw LibraryError.emptyPlaylist }
+        return playlist
     }
 
     // MARK: - Persistence

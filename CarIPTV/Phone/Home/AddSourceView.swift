@@ -149,11 +149,12 @@ private struct SourceForm<Fields: View>: View {
 private struct M3ULinkForm: View {
     @State private var link = ""
     @State private var name = ""
+    @State private var guide = ""
 
     var body: some View {
-        SourceForm(title: "M3U Link", canAdd: url != nil) {
+        SourceForm(title: "M3U Link", canAdd: url != nil && (guide.isEmpty || guideURL != nil)) {
             guard let url else { return }
-            try await LibraryStore.shared.addM3U(url: url, name: name)
+            try await LibraryStore.shared.addM3U(url: url, name: name, guideURL: guideURL)
         } fields: {
             Section {
                 TextField("Playlist link", text: $link, prompt: Text(verbatim: "https://example.com/playlist.m3u"))
@@ -165,11 +166,28 @@ private struct M3ULinkForm: View {
             } footer: {
                 Text("A link to an .m3u or .m3u8 playlist from your provider.")
             }
+            Section {
+                TextField("TV guide link (optional)", text: $guide, prompt: Text(verbatim: "https://example.com/epg.xml.gz"))
+                    .keyboardType(.URL)
+                    .textContentType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            } footer: {
+                Text("An XMLTV guide (.xml or .xml.gz). Most playlists already include one; add it only if programmes don't show.")
+            }
         }
     }
 
     private var url: URL? {
-        URL(string: link.trimmingCharacters(in: .whitespaces)).flatMap { $0.scheme == nil ? nil : $0 }
+        Self.webURL(link)
+    }
+
+    private var guideURL: URL? {
+        Self.webURL(guide)
+    }
+
+    private static func webURL(_ text: String) -> URL? {
+        URL(string: text.trimmingCharacters(in: .whitespaces)).flatMap { $0.scheme == nil ? nil : $0 }
     }
 }
 

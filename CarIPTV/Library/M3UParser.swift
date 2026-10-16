@@ -3,6 +3,35 @@ import Foundation
 /// Parses extended M3U playlists (`#EXTM3U` / `#EXTINF` with `tvg-*` and `group-title` attributes).
 /// Tolerant by design: IPTV playlists in the wild break the format in every possible way.
 enum M3UParser {
+    struct Playlist: Sendable {
+        var channels: [Channel]
+        /// The first XMLTV guide named in the `#EXTM3U` header.
+        var guideURL: URL?
+    }
+
+    static func parsePlaylist(_ text: String) -> Playlist {
+        Playlist(channels: parse(text), guideURL: guideURLs(text).first)
+    }
+
+    /// `#EXTM3U url-tvg="https://a/epg.xml.gz,https://b/epg.xml"` (also `x-tvg-url`, `tvg-url`).
+    static func guideURLs(_ text: String) -> [URL] {
+        guard let header = text.split(whereSeparator: \.isNewline).lazy
+            .map({ $0.trimmingCharacters(in: .whitespaces) })
+            .first(where: { $0.hasPrefix("#EXTM3U") }) else { return [] }
+        let attributes = parseAttributes(Substring(header))
+        let values = ["url-tvg", "x-tvg-url", "tvg-url"].compactMap { attributes[$0] }
+        var urls: [URL] = []
+        for value in values {
+            for part in value.split(separator: ",") {
+                let trimmed = part.trimmingCharacters(in: .whitespaces)
+                guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+                      scheme == "http" || scheme == "https", !urls.contains(url) else { continue }
+                urls.append(url)
+            }
+        }
+        return urls
+    }
+
     static func parse(_ text: String) -> [Channel] {
         var channels: [Channel] = []
         var pendingInfo: (name: String?, attributes: [String: String])?
@@ -44,7 +73,8 @@ enum M3UParser {
             occurrences[line] = count + 1
             let id = count == 0 ? line : "\(line)#\(count)"
 
-            channels.append(Channel(id: id, name: name, url: url, group: group, logo: logo))
+            let guideID = nonEmpty(attributes["tvg-id"])
+            channels.append(Channel(id: id, name: name, url: url, group: group, logo: logo, guideID: guideID))
             pendingInfo = nil
             pendingGroup = nil
         }

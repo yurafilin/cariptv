@@ -193,7 +193,7 @@ struct PlayerView: View {
 
     private func loadGuide(_ item: LibraryItem?) async {
         guide = (nil, nil)
-        guard let item, !item.isPoster, let client = LibraryStore.shared.xtreamClient(for: item.sourceID) else { return }
-        guide = await ProgramGuide.shared.nowNext(client: client, streamID: item.channel.id)
+        guard let item, let lookup = LibraryStore.shared.guideLookup(for: item) else { return }
+        guide = await ProgramGuide.shared.nowNext(lookup)
     }
 }

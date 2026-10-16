@@ -5,13 +5,22 @@ import Testing
 /// Serves canned responses to `URLSession.shared`, routed by host so suites can run in parallel.
 final class StubURLProtocol: URLProtocol {
     typealias Handler = @Sendable (URLRequest) -> (status: Int, body: String)
+    typealias DataHandler = @Sendable (URLRequest) -> (status: Int, body: Data)
 
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var handlers: [String: Handler] = [:]
+    nonisolated(unsafe) private static var handlers: [String: DataHandler] = [:]
     nonisolated(unsafe) private static var requests: [String: [URLRequest]] = [:]
     nonisolated(unsafe) private static var registered = false
 
     static func stub(host: String, _ handler: @escaping Handler) {
+        stubData(host: host) { request in
+            let (status, body) = handler(request)
+            return (status, Data(body.utf8))
+        }
+    }
+
+    /// Binary bodies, e.g. a gzipped guide.
+    static func stubData(host: String, _ handler: @escaping DataHandler) {
         lock.withLock {
             if !registered {
                 URLProtocol.registerClass(StubURLProtocol.self)
@@ -48,14 +57,14 @@ final class StubURLProtocol: URLProtocol {
             stream.close()
             recorded.httpBody = data
         }
-        let handler = Self.lock.withLock { () -> Handler? in
+        let handler = Self.lock.withLock { () -> DataHandler? in
             Self.requests[host, default: []].append(recorded)
             return Self.handlers[host]
         }
-        let (status, body) = handler?(recorded) ?? (404, "")
+        let (status, body) = handler?(recorded) ?? (404, Data())
         let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
 

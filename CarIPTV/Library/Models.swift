@@ -8,6 +8,8 @@ struct Channel: Codable, Hashable, Identifiable, Sendable {
     var url: URL
     var group: String?
     var logo: URL?
+    /// `tvg-id` from the playlist: the channel's id in the XMLTV guide.
+    var guideID: String? = nil
 }
 
 /// A channel together with its source: what favorites, recents and search results hold.
@@ -37,6 +39,13 @@ struct Source: Codable, Hashable, Identifiable, Sendable {
     var kind: Kind
     var channelCount: Int
     var updatedAt: Date
+    /// XMLTV guide the user entered for an M3U source; wins over the playlist's own.
+    var guideURL: URL? = nil
+    /// XMLTV guide named in the playlist header (`url-tvg`, `x-tvg-url`); updated on refresh.
+    var playlistGuideURL: URL? = nil
+
+    /// Where the programme guide of an M3U source comes from, if anywhere.
+    var effectiveGuideURL: URL? { guideURL ?? playlistGuideURL }
 
     var kindTitle: String {
         switch kind {

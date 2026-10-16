@@ -100,9 +100,8 @@ struct ChannelRow: View {
                 .tint(.accentColor)
         }
         .task(id: item.id) {
-            // Only Xtream live channels have a guide; their channel id is the stream id.
-            guard !item.isPoster, let client = LibraryStore.shared.xtreamClient(for: item.sourceID) else { return }
-            nowShowing = await ProgramGuide.shared.nowNext(client: client, streamID: item.channel.id).now
+            guard let lookup = LibraryStore.shared.guideLookup(for: item) else { return }
+            nowShowing = await ProgramGuide.shared.nowNext(lookup).now
         }
     }
 
@@ -159,9 +158,14 @@ struct MiniPlayerBar: View {
             .onTapGesture {
                 AppRouter.shared.isPlayerPresented = true
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 4)
+            .padding(.horizontal, Self.sideInset)
+            .padding(.bottom, 12)
         }
+    }
+
+    /// Lines the bar up with the tab bar: since iOS 26 it floats 21 pt from the screen edges.
+    private static var sideInset: CGFloat {
+        if #available(iOS 26, *) { 21 } else { 12 }
     }
 }
 
