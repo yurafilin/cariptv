@@ -2,6 +2,8 @@ import CarPlay
 import Observation
 
 /// What the connected car allows. Video is shown only when every check passes.
+/// Channels and films reach the car through the system's video presentation (iOS 26.4+);
+/// screen mirroring additionally needs a window of our own on the car screen.
 @MainActor @Observable
 final class CarState {
     static let shared = CarState()
@@ -9,8 +11,6 @@ final class CarState {
     enum VideoAvailability: Equatable {
         case allowed
         case notConnected
-        /// CarPlay connected the scene without a window of our own: nothing to draw video into.
-        case noCarWindow
         /// The head unit reports `supportsVideoPlayback == false`.
         case unsupportedCar
         /// `supportsVideoPlayback` is missing: iOS before 26.4.
@@ -28,11 +28,6 @@ final class CarState {
 
     var videoAvailability: VideoAvailability {
         guard isConnected else { return .notConnected }
-        guard hasWindow else { return .noCarWindow }
-        #if targetEnvironment(simulator)
-        // The Simulator's CarPlay display is not a car: there is no parked state to respect.
-        return .allowed
-        #else
         switch supportsVideoPlayback {
         case nil: return .needsNewerIOS
         case false?: return .unsupportedCar
@@ -40,7 +35,18 @@ final class CarState {
         }
         guard limitedInterfaces.isEmpty else { return .whileDriving }
         return .allowed
-        #endif
+    }
+
+    /// Mirroring draws into a CarPlay window of our own. CarPlay documents that window only for
+    /// navigation apps, so a video app may never get one; then mirroring stays on the phone.
+    var mirroringAvailable: Bool {
+        hasWindow && videoAvailability == .allowed
+    }
+
+    var mirroringMessage: String {
+        if mirroringAvailable { return String(localized: "Available") }
+        if isConnected, !hasWindow { return String(localized: "Not available in this car") }
+        return videoAvailability.message
     }
 
     func connect(hasWindow: Bool, supportsVideoPlayback: Bool?, limitedInterfaces: CPLimitableUserInterface) {
@@ -61,13 +67,12 @@ final class CarState {
         limitedInterfaces = []
     }
 
-    /// `CPSessionConfiguration.supportsVideoPlayback` ships in iOS 26.4. The SDK of Xcode 26.3 (iOS 26.2)
-    /// does not declare it, so it is read through the Objective-C runtime; switch to the property
-    /// once the project builds with the iOS 26.4+ SDK.
-    nonisolated static func supportsVideoPlayback(_ configuration: CPSessionConfiguration) -> Bool? {
-        let key = "supportsVideoPlayback"
-        guard configuration.responds(to: NSSelectorFromString(key)) else { return nil }
-        return configuration.value(forKey: key) as? Bool
+    /// Whether the connected head unit can show video at all (iOS 26.4+); `nil` on older iOS.
+    static func supportsVideoPlayback(_ configuration: CPSessionConfiguration) -> Bool? {
+        if #available(iOS 26.4, *) {
+            return configuration.supportsVideoPlayback
+        }
+        return nil
     }
 }
 
@@ -78,7 +83,7 @@ extension CarState.VideoAvailability {
             String(localized: "Video is available")
         case .notConnected:
             String(localized: "Connect your iPhone to CarPlay")
-        case .noCarWindow, .unsupportedCar:
+        case .unsupportedCar:
             String(localized: "This car doesn't support video in CarPlay")
         case .needsNewerIOS:
             String(localized: "Video in CarPlay needs iOS 26.4 or later")

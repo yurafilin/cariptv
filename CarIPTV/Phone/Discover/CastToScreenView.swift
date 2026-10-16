@@ -25,7 +25,12 @@ struct CastToScreenView: View {
                     isOK: car.videoAvailability == .allowed
                 )
                 StatusRow(
-                    title: "Mirroring",
+                    title: "Mirroring to car",
+                    value: car.mirroringMessage,
+                    isOK: car.mirroringAvailable
+                )
+                StatusRow(
+                    title: "Screen capture",
                     value: mirrorText,
                     isOK: mirror.state == .streaming
                 )

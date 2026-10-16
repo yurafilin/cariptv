@@ -1,8 +1,11 @@
 import CarPlay
+import CoreMedia
 import UIKit
 
 /// CarPlay scene: tabs with favorites, recent channels and the screen status.
-/// When CarPlay hands the app a window of its own, video is drawn there by `CarScreenViewController`.
+/// Selecting a channel starts our player; on iOS 26.4+ the system then shows its video on the car
+/// screen (`CPPlaybackConfiguration`, AirPlay from the same `AVPlayer`) while the car is parked.
+/// If CarPlay also hands the app a window of its own, mirroring is drawn there by `CarScreenViewController`.
 final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     private var interfaceController: CPInterfaceController?
     private var window: CPWindow?
@@ -101,11 +104,25 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
     private func updateList(_ template: CPListTemplate?, _ items: [LibraryItem]) {
         guard let template else { return }
+        let playback = PlaybackController.shared
+        let currentID = playback.media?.libraryItem?.id
         let limit = min(items.count, CPListTemplate.maximumItemCount)
         let rows = items.prefix(limit).map { item -> CPListItem in
             let row = CPListItem(text: item.channel.name, detailText: item.channel.group, image: UIImage(systemName: "tv"))
+            let isCurrent = item.id == currentID
+            let pauses = isCurrent && playback.state == .playing
+            if #available(iOS 26.4, *) {
+                row.playbackConfiguration = Self.playbackConfiguration(isCurrent: isCurrent, pauses: pauses)
+            }
+            row.isPlaying = isCurrent && playback.isActive
             row.handler = { [weak self] _, completion in
-                PlaybackController.shared.play(item, queue: items)
+                if pauses {
+                    playback.pause()
+                } else if isCurrent, playback.state == .paused {
+                    playback.resume()
+                } else {
+                    playback.play(item, queue: items)
+                }
                 self?.showNowPlaying()
                 completion()
             }
@@ -114,8 +131,30 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         template.updateSections([CPListSection(items: Array(rows))])
     }
 
+    /// The system shows the video itself (or "Now Playing" in cars without video) after the
+    /// row is selected; the row also carries the play or pause glyph and the progress.
+    @available(iOS 26.4, *)
+    private static func playbackConfiguration(isCurrent: Bool, pauses: Bool) -> CPPlaybackConfiguration {
+        var elapsed = CMTime.zero
+        var duration = CMTime.zero
+        if isCurrent {
+            let position = PlaybackController.shared.position
+            elapsed = CMTime(seconds: position.elapsed, preferredTimescale: 600)
+            // Live channels have no duration; CarPlay expects zero for them.
+            if let total = position.duration {
+                duration = CMTime(seconds: total, preferredTimescale: 600)
+            }
+        }
+        return CPPlaybackConfiguration(
+            preferredPresentation: .video,
+            playbackAction: pauses ? .pause : .play,
+            elapsedTime: elapsed,
+            duration: duration
+        )
+    }
+
     private func updateScreenItems() {
-        let availability = CarState.shared.videoAvailability
+        let car = CarState.shared
         let mirror = MirrorStatus.shared
         let playback = PlaybackController.shared
 
@@ -123,8 +162,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         playingItem.setDetailText(playback.isActive ? playback.state.message : nil)
 
         let detail: String
-        if availability != .allowed {
-            detail = availability.message
+        if !car.mirroringAvailable {
+            detail = car.mirroringMessage
         } else if mirror.state == .streaming {
             detail = String(localized: "On · \(mirror.framesPerSecond) fps")
         } else {
@@ -133,7 +172,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         mirroringItem.setDetailText(detail)
     }
 
+    /// Before iOS 26.4 the rows carry no playback configuration, so "Now Playing" is opened by hand.
     private func showNowPlaying() {
+        if #available(iOS 26.4, *) { return }
         guard let interfaceController, interfaceController.topTemplate !== CPNowPlayingTemplate.shared else { return }
         interfaceController.pushTemplate(CPNowPlayingTemplate.shared, animated: true) { _, error in
             if let error {
