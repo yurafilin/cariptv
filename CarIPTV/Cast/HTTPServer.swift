@@ -1,7 +1,8 @@
 import Foundation
 import Network
 
-/// Minimal HTTP/1.1 server for the UPnP renderer: one request per connection, `Connection: close`.
+/// Minimal HTTP/1.1 server for the UPnP renderer and the local HLS packager: one request per
+/// connection, `Connection: close`.
 final class HTTPServer {
     struct Request {
         var method: String
@@ -41,6 +42,7 @@ final class HTTPServer {
             switch status {
             case 200: "OK"
             case 400: "Bad Request"
+            case 503: "Service Unavailable"
             case 404: "Not Found"
             case 405: "Method Not Allowed"
             case 412: "Precondition Failed"
@@ -58,9 +60,12 @@ final class HTTPServer {
     private static let maxRequestSize = 1 << 20
     private let queue = DispatchQueue(label: "weappico.cariptv.cast.http")
     private let handler: Handler
+    private let loopbackOnly: Bool
     private var listener: NWListener?
 
-    init(handler: @escaping Handler) {
+    /// `loopbackOnly`: reachable only from this phone (the HLS packager); otherwise from the local network (UPnP).
+    init(loopbackOnly: Bool = false, handler: @escaping Handler) {
+        self.loopbackOnly = loopbackOnly
         self.handler = handler
     }
 
@@ -68,7 +73,12 @@ final class HTTPServer {
         queue.async { [self] in
             guard listener == nil else { return }
             do {
-                let listener = try NWListener(using: .tcp)
+                let parameters = NWParameters.tcp
+                if loopbackOnly {
+                    // Like MirrorReceiver: `requiredInterfaceType = .loopback` drops connections in the Simulator.
+                    parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+                }
+                let listener = try NWListener(using: parameters)
                 listener.newConnectionHandler = { [weak self] connection in
                     self?.serve(connection)
                 }

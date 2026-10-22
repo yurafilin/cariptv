@@ -11,6 +11,8 @@ final class PlaybackController {
     enum State: Equatable {
         case idle
         case loading
+        /// A web file is downloading before it is repackaged for the car (percent).
+        case preparing(Int)
         case playing
         case paused
         case failed(String)
@@ -24,6 +26,10 @@ final class PlaybackController {
 
     @ObservationIgnored private var itemObservation: NSKeyValueObservation?
     @ObservationIgnored private var timeControlObservation: NSKeyValueObservation?
+    /// `PlayableMedia.startTime`, applied once the item can seek.
+    @ObservationIgnored private var pendingStart: Double?
+    /// Repackages the current file into HLS for the car display.
+    @ObservationIgnored private var packager: HLSPackager?
 
     private init() {
         // CarPlay video apps must support AirPlay video: in cars that show video the system
@@ -50,8 +56,61 @@ final class PlaybackController {
         state = .loading
         Log.playback.info("play \(media.url.absoluteString, privacy: .private)")
 
+        pendingStart = media.startTime.flatMap { $0 > 1 ? $0 : nil }
+        packager?.cancel()
+        packager = nil
+
         // Server posters carry internal URLs; the stream URL with credentials is built only now.
-        let item = AVPlayerItem(url: LibraryStore.shared.resolvedURL(media.url))
+        let source = LibraryStore.shared.resolvedURL(media.url)
+        // The car shows only HLS from our player (-11870 for plain files): files are repackaged on the phone.
+        let toCar = CarState.shared.videoAvailability == .allowed
+        if toCar, HLSPackager.needsPackaging(source, isLive: media.isLive) {
+            // The phone reads the file, so the page's user agent and cookies still apply.
+            playPackaged(source, options: media.web?.assetOptions)
+        } else {
+            // A stream going to the car is not given them: external playback may refuse such an asset.
+            startItem(AVURLAsset(url: source, options: toCar ? nil : media.web?.assetOptions))
+        }
+
+        if let libraryItem = media.libraryItem {
+            LibraryStore.shared.markPlayed(libraryItem)
+        }
+        updateNowPlaying()
+    }
+
+    /// Repackages `source` into HLS, then plays the local playlist.
+    private func playPackaged(_ source: URL, options: [String: Any]?) {
+        let packager = HLSPackager(source: source, options: options)
+        packager.onProgress = { fraction in
+            let percent = Int(fraction * 100)
+            Task { @MainActor in
+                let controller = PlaybackController.shared
+                guard controller.packager === packager, controller.state != .preparing(percent),
+                      controller.player.currentItem == nil else { return }
+                controller.state = .preparing(percent)
+                controller.updateNowPlaying()
+            }
+        }
+        self.packager = packager
+        player.replaceCurrentItem(with: nil)
+        Task {
+            do {
+                try await packager.start()
+                let url = try await LocalHLSServer.shared.url(for: packager)
+                guard self.packager === packager else { return }
+                Log.playback.info("hls: playing \(packager.segmentCount) segments so far")
+                startItem(AVURLAsset(url: url))
+            } catch {
+                guard self.packager === packager, !(error is CancellationError) else { return }
+                Log.playback.error("hls: \(String(describing: error), privacy: .public)")
+                state = .failed(Self.describe(error) ?? String(localized: "This video can't be played. Its format may not be supported."))
+                updateNowPlaying()
+            }
+        }
+    }
+
+    private func startItem(_ asset: AVURLAsset) {
+        let item = AVPlayerItem(asset: asset)
         itemObservation = item.observe(\.status, options: [.new]) { item, _ in
             let status = item.status
             if let error = item.error {
@@ -62,11 +121,6 @@ final class PlaybackController {
         }
         player.replaceCurrentItem(with: item)
         player.play()
-
-        if let libraryItem = media.libraryItem {
-            LibraryStore.shared.markPlayed(libraryItem)
-        }
-        updateNowPlaying()
     }
 
     func play(_ item: LibraryItem, queue: [LibraryItem] = []) {
@@ -100,6 +154,8 @@ final class PlaybackController {
     }
 
     func stop() {
+        packager?.cancel()
+        packager = nil
         player.pause()
         player.replaceCurrentItem(with: nil)
         itemObservation = nil
@@ -124,6 +180,9 @@ final class PlaybackController {
 
     /// Network errors read well as they are; media errors ("CoreMediaErrorDomain -16172") do not.
     nonisolated static func describe(_ error: Error?) -> String? {
+        if let error = error as? HLSPackager.PackagerError {
+            return error.errorDescription
+        }
         guard let error = error as NSError? else { return nil }
         if error.domain == NSURLErrorDomain {
             return error.localizedDescription
@@ -139,6 +198,10 @@ final class PlaybackController {
         case .failed:
             state = .failed(message ?? String(localized: "This video can't be played. Its format may not be supported."))
         case .readyToPlay:
+            if let start = pendingStart {
+                pendingStart = nil
+                seek(to: start)
+            }
             if state == .loading, player.timeControlStatus == .playing {
                 state = .playing
             }
@@ -149,7 +212,8 @@ final class PlaybackController {
     }
 
     private func timeControlChanged(_ status: AVPlayer.TimeControlStatus) {
-        guard media != nil else { return }
+        // While a file is being prepared for the car there is no item yet: nothing has paused.
+        guard media != nil, player.currentItem != nil else { return }
         if case .failed = state { return }
         switch status {
         case .playing: state = .playing
@@ -233,6 +297,7 @@ extension PlaybackController.State {
         switch self {
         case .idle: String(localized: "Not playing")
         case .loading: String(localized: "Loading…")
+        case .preparing(let percent): String(localized: "Preparing for the car… \(percent)%")
         case .playing: String(localized: "Playing")
         case .paused: String(localized: "Paused")
         case .failed(let message): message

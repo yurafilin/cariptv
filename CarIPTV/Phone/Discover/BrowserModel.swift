@@ -9,7 +9,8 @@ struct Bookmark: Codable, Hashable, Identifiable {
     var id: URL { url }
 }
 
-/// One web view kept for the session, its navigation state and the user's saved sites.
+/// One web view kept for the session, its navigation state, the video playing on the page and
+/// the user's saved sites.
 @MainActor @Observable
 final class BrowserModel {
     static let shared = BrowserModel()
@@ -37,7 +38,10 @@ final class BrowserModel {
     private(set) var progress = 0.0
     var isShowingHome = true
     private(set) var bookmarks: [Bookmark]
+    /// The video that started playing on the current page; offered for the car display.
+    private(set) var video: WebVideo?
 
+    @ObservationIgnored private var videoFrame: WKFrameInfo?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
     @ObservationIgnored private static let bookmarksKey = "browser.bookmarks"
 
@@ -47,6 +51,9 @@ final class BrowserModel {
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.allowsPictureInPictureMediaPlayback = true
         configuration.allowsAirPlayForMediaPlayback = true
+        let controller = configuration.userContentController
+        controller.addUserScript(WKUserScript(source: WebVideo.script, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        controller.add(WebVideoMessageHandler(), name: WebVideo.messageName)
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
 
@@ -56,7 +63,7 @@ final class BrowserModel {
         observations = [
             webView.observe(\.url) { webView, _ in
                 let value = webView.url
-                Task { @MainActor in BrowserModel.shared.url = value }
+                Task { @MainActor in BrowserModel.shared.pageChanged(to: value) }
             },
             webView.observe(\.title) { webView, _ in
                 let value = webView.title
@@ -98,6 +105,51 @@ final class BrowserModel {
 
     func reload() {
         webView.reload()
+    }
+
+    // MARK: - Video
+
+    private func pageChanged(to url: URL?) {
+        if url != self.url {
+            video = nil
+            videoFrame = nil
+        }
+        self.url = url
+    }
+
+    func found(_ video: WebVideo, in frame: WKFrameInfo) {
+        Log.playback.info("browser: \(video.kind.rawValue, privacy: .public) video on \(video.page?.host() ?? "?", privacy: .public)")
+        // A protected video in an ad or preview must not hide a playable one found earlier.
+        if !video.canPlay, self.video?.canPlay == true { return }
+        self.video = video
+        videoFrame = frame
+    }
+
+    /// Hands the page's video to our player: the page pauses, the player continues from the same
+    /// moment, and the car shows it like any channel.
+    func playVideo() async {
+        guard let video, video.canPlay, let url = video.url else { return }
+        _ = try? await webView.callAsyncJavaScript(
+            "if (window.__cariptvPauseVideos) window.__cariptvPauseVideos();",
+            arguments: [:], in: videoFrame, contentWorld: .page
+        )
+        let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
+        let media = PlayableMedia(
+            title: video.title,
+            subtitle: video.page?.host(),
+            url: url,
+            artwork: video.poster,
+            isLive: video.isLive,
+            startTime: video.isLive ? nil : video.currentTime,
+            web: WebRequest(userAgent: video.userAgent, cookies: cookies.filter { Self.cookie($0, appliesTo: url) })
+        )
+        AppRouter.shared.play(media)
+    }
+
+    nonisolated static func cookie(_ cookie: HTTPCookie, appliesTo url: URL) -> Bool {
+        guard let host = url.host()?.lowercased() else { return false }
+        let domain = cookie.domain.lowercased().trimmingPrefix(".")
+        return host == domain || host.hasSuffix("." + domain)
     }
 
     var isCurrentPageBookmarked: Bool {

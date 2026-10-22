@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// One playable entry of a source: a live channel from an M3U playlist or an Xtream account.
@@ -87,7 +88,8 @@ struct LocalVideo: Codable, Hashable, Identifiable, Sendable {
     var addedAt: Date
 }
 
-/// Anything the player can play: a channel, a local file, a stream cast from another app.
+/// Anything the player can play: a channel, a local file, a stream cast from another app,
+/// a video taken from a web page.
 struct PlayableMedia: Hashable, Sendable {
     var title: String
     var subtitle: String?
@@ -96,14 +98,21 @@ struct PlayableMedia: Hashable, Sendable {
     var isLive: Bool
     /// Set for library channels, so the player can mark them recent and toggle favorites.
     var libraryItem: LibraryItem?
+    /// Seconds to start from: a web video continues where it was on the page.
+    var startTime: Double?
+    /// A web video is requested the way the page requested it.
+    var web: WebRequest?
 
-    init(title: String, subtitle: String? = nil, url: URL, artwork: URL? = nil, isLive: Bool, libraryItem: LibraryItem? = nil) {
+    init(title: String, subtitle: String? = nil, url: URL, artwork: URL? = nil, isLive: Bool, libraryItem: LibraryItem? = nil,
+         startTime: Double? = nil, web: WebRequest? = nil) {
         self.title = title
         self.subtitle = subtitle
         self.url = url
         self.artwork = artwork
         self.isLive = isLive
         self.libraryItem = libraryItem
+        self.startTime = startTime
+        self.web = web
     }
 
     init(_ item: MediaItem, sourceID: UUID, group: String?) {
@@ -120,6 +129,24 @@ struct PlayableMedia: Hashable, Sendable {
             isLive: InternalURL.parse(item.channel.url) == nil,
             libraryItem: item
         )
+    }
+}
+
+/// How a page's video is fetched outside the page: many sites serve it only to their own browser
+/// and its cookies.
+struct WebRequest: Hashable, Sendable {
+    var userAgent: String?
+    var cookies: [HTTPCookie] = []
+
+    var assetOptions: [String: Any] {
+        var options: [String: Any] = [:]
+        if let userAgent {
+            options[AVURLAssetHTTPUserAgentKey] = userAgent
+        }
+        if !cookies.isEmpty {
+            options[AVURLAssetHTTPCookiesKey] = cookies
+        }
+        return options
     }
 }
 

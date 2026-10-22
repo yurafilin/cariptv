@@ -1,11 +1,10 @@
 import SwiftUI
 import WebKit
 
-/// Web browser with suggested video sites and the user's saved ones. The page reaches the car
-/// display through screen mirroring.
+/// Web browser with suggested video sites and the user's saved ones. A video that starts playing
+/// on a page can be handed to our player, and through it to the car display.
 struct BrowserView: View {
     @State private var address = ""
-    @State private var picker = BroadcastPicker()
     @FocusState private var isAddressFocused: Bool
 
     var body: some View {
@@ -26,14 +25,13 @@ struct BrowserView: View {
         .navigationTitle(model.isShowingHome ? String(localized: "Browser") : (model.title ?? ""))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .safeAreaInset(edge: .bottom) {
-            bottomBar(model)
-        }
-        .background {
-            BroadcastPickerHost(picker: picker)
-                .frame(width: 1, height: 1)
-                .opacity(0.01)
-                .accessibilityHidden(true)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if let video = model.video, !model.isShowingHome {
+                    videoBar(video, model)
+                }
+                bottomBar(model)
+            }
         }
         .onChange(of: model.url) { _, url in
             if !isAddressFocused {
@@ -49,7 +47,7 @@ struct BrowserView: View {
                     siteGrid(title: "Saved", sites: model.bookmarks, removable: true)
                 }
                 siteGrid(title: "Suggested", sites: BrowserModel.suggestedSites, removable: false)
-                Text("Open a site, then tap \(Image(systemName: "rectangle.on.rectangle")) to show it on the car display.")
+                Text("Start a video on a site, then tap \(Image(systemName: "play.rectangle.fill")) Watch in Car.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -88,6 +86,39 @@ struct BrowserView: View {
                 }
             }
         }
+    }
+
+    private func videoBar(_ video: WebVideo, _ model: BrowserModel) -> some View {
+        Button {
+            Task { await model.playVideo() }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: video.canPlay ? "play.rectangle.fill" : "lock.rectangle")
+                    .font(.title2)
+                    .foregroundStyle(video.canPlay ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(video.canPlay ? "Watch in Car" : "This video can't go to the car")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(video.canPlay ? video.title : String(localized: "The site plays it only inside the page."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if video.canPlay {
+                    Image(systemName: "chevron.forward")
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+        .disabled(!video.canPlay)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 
     private func bottomBar(_ model: BrowserModel) -> some View {
@@ -135,11 +166,6 @@ struct BrowserView: View {
                     } label: {
                         Label("Reload", systemImage: "arrow.clockwise")
                     }
-                }
-                Button {
-                    picker.present()
-                } label: {
-                    Label("Show on Car Display", systemImage: "rectangle.on.rectangle")
                 }
             } label: {
                 Image(systemName: "ellipsis")

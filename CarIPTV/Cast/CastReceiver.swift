@@ -271,7 +271,7 @@ final class CastReceiver {
         switch PlaybackController.shared.state {
         case .playing: return "PLAYING"
         case .paused: return "PAUSED_PLAYBACK"
-        case .loading: return "TRANSITIONING"
+        case .loading, .preparing: return "TRANSITIONING"
         case .idle, .failed: return "STOPPED"
         }
     }

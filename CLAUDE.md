@@ -8,7 +8,7 @@
 
 ## Что нужно знать до первой правки
 
-1. **Каналы и фильмы в машине показывает система, не мы** (официальный путь, iOS 26.4+). У строк списков CarPlay стоит `CPPlaybackConfiguration(preferredPresentation: .video)`; после выбора строки система сама показывает видео из нашего `AVPlayer` через AirPlay, а в машине без видео или в движении — «Сейчас играет». Своего окна для этого не нужно; `CPNowPlayingTemplate` вручную открывается только до iOS 26.4.
+1. **Каналы и фильмы в машине показывает система, не мы** (официальный путь, iOS 26.4+). У строк списков CarPlay стоит `CPPlaybackConfiguration(preferredPresentation: .video)`; после выбора строки система сама показывает видео из нашего `AVPlayer` через AirPlay, а в машине без видео или в движении — «Сейчас играет». Своего окна для этого не нужно; `CPNowPlayingTemplate` вручную открывается только до iOS 26.4. **В машину система пропускает только HLS** (проверено на iPhone 2026-10-21): обычный файл (MP4/MOV, файлы YouTube, VOD Xtream, локальные видео) даёт `-11870 AVErrorExternalPlaybackNotSupportedForAsset`. Поэтому, когда машина показывает видео, файлы идут через `HLSPackager`: без перекодирования, в fMP4-куски на диске телефона, раздаёт `LocalHLSServer` на 127.0.0.1. MKV/TS/WebM так не переупаковать.
 2. **Видео в машине — только с разрешения машины.** `CarState.videoAvailability`: машина сообщает `supportsVideoPlayback == true` и `limitedUserInterfaces` пуст (CarPlay ограничивает интерфейс в движении). Ослаблять проверку нельзя: это правило Apple для категории CarPlay video и безопасность водителя.
 3. **Один плеер на всё приложение** — `PlaybackController` (AVPlayer, AirPlay-видео включено: через него система и показывает видео в машине). Держит очередь — список, из которого запущен канал; «следующий/предыдущий» на экране, экране блокировки и кнопках руля идут по ней. Каналы, локальные видео и трансляции из других приложений играют через него.
 4. **Зеркалирование рисуется в собственное окно CarPlay** (`CarScreenViewController`), и только если CarPlay его выдал: `CarState.mirroringAvailable` = окно есть + видео разрешено. Apple документирует это окно только для навигаторов, официального пути зеркалирования для video-приложений нет — на устройстве может не заработать. Цепочка: `ScreenRelay` (ReplayKit) → H.264 (`VideoEncoder`) → TCP `127.0.0.1:52741` (`RelayClient` / `MirrorProtocol`) → `MirrorReceiver` → `MirrorRenderer` → окно CarPlay. Код в `Shared/` компилируется в оба таргета. Звук не передаётся: источник сам играет в динамики машины.
@@ -35,7 +35,7 @@
 
 - `Config/` — Info.plist обоих таргетов и entitlements. И устройство, и Simulator — только `com.apple.developer.carplay-video`, как выдано.
 - `CarIPTV/Library/` — источники, разбор M3U, клиенты Xtream (`XtreamClient` + `XtreamCatalog` для фильмов и сериалов), Jellyfin/Emby (`JellyfinClient`), Plex (`PlexClient`), общий протокол `MediaServer`, Keychain, `LibraryStore` (JSON в Application Support, пароли и токены — в Keychain).
-- `CarIPTV/Playback/` — `PlaybackController`.
+- `CarIPTV/Playback/` — `PlaybackController`; `HLSPackager` + `LocalHLSServer` — переупаковка файлов в HLS для машины.
 - `CarIPTV/Cast/` — DLNA-приёмник.
 - `CarIPTV/CarPlay/` — сцена CarPlay (вкладки Favorites / Recent / Screen, у строк — `playbackConfiguration`), состояние машины (`CarState`), окно для зеркалирования.
 - `CarIPTV/Mirror/` — приём зеркалирования и отрисовка.
@@ -57,7 +57,16 @@ xcodebuild -project CarIPTV.xcodeproj -scheme CarIPTV -destination 'generic/plat
 
 Xcode 27.1, SDK iOS 27.1; симулятор iPhone 18 Pro на iOS 27.0. Тесты зелёные, сборки без ошибок и предупреждений (строки `appintentsmetadataprocessor … warning` — служебные, не наши). Вторая команда подписывает сборку на устройство: в `embedded.mobileprovision` должен быть `com.apple.developer.carplay-video`. Изменение, видимое глазами, проверено в симуляторе либо явно помечено непроверенным.
 
-Серверы проверяются на локальной имитации (Python): она отвечает как панель Xtream и как Jellyfin, отдаёт M3U-плейлист с программой XMLTV (`.xml.gz`, время в +0300), постеры и настоящий HLS (fMP4, сгенерирован AVAssetWriter). Приложение запускается с `-CarIPTVDebugSources`, дальше — обычная навигация.
+Серверы проверяются на локальной имитации `Tools/MockServers/mockservers.py` (Python, в репозитории — не во временной папке, её чистит система): она отвечает как панель Xtream и как Jellyfin, отдаёт M3U-плейлист с программой XMLTV (`.xml.gz`, время в +0300) и постеры; видео — перенаправление на открытые тестовые HLS-потоки Apple (нужен интернет). Приложение запускается с `-CarIPTVDebugSources http://<адрес>:8766`, дальше — обычная навигация.
+
+**Проверка CarPlay — только на iPhone** (iOS 27+) с CarPlay Simulator из Additional Tools for Xcode, iPhone по кабелю:
+```bash
+python3 Tools/MockServers/mockservers.py --host $(ipconfig getifaddr en0)
+xcodebuild build -project CarIPTV.xcodeproj -scheme CarIPTV -destination 'id=<UDID>' -derivedDataPath build/DerivedData -allowProvisioningUpdates
+xcrun devicectl device install app --device <UDID> build/DerivedData/Build/Products/Debug-iphoneos/CarIPTV.app
+xcrun devicectl device process launch --device <UDID> --terminate-existing --console --environment-variables '{"OS_ACTIVITY_DT_MODE":"YES"}' weappico.cariptv -CarIPTVDebugSources http://<адрес Mac>:8766
+```
+Последняя команда выводит журнал приложения (`[carplay] car: connected window=… supportsVideoPlayback=… limited=…`). В CarPlay Simulator конфигурация — **Standard Video Playback** (кнопка под названием телефона), иначе CarIPTV не виден. Отладочные источники при пустом избранном добавляют в него каналы — в машине сразу есть что выбрать.
 
 DLNA проверяется с Mac без телефона: Simulator живёт в сети Mac, Python-скрипт шлёт M-SEARCH на 239.255.255.250:1900, находит `CarIPTV` и управляет через SOAP (SetAVTransportURI → Play → GetTransportInfo).
 
@@ -83,7 +92,12 @@ Entitlements: `carplay-audio`, `carplay-video`, `networking.multicast`, без �
 ## Чего ещё нет
 
 - **Entitlements:** **Multicast** (`com.apple.developer.networking.multicast`) не запрошен — без него DLNA на устройстве не найдут; заявка — владелец, developer.apple.com/contact/request/networking-multicast.
-- **Не проверено:** весь экран CarPlay на iOS 27 — показ видео системой после выбора канала, вкладки Favorites / Recent / Screen, значки play/pause у строк (в DeviceHub экрана CarPlay нет — нужен iPhone); выдаёт ли CarPlay video-приложению своё окно, то есть работает ли зеркалирование в машине вообще; зеркалирование на устройстве; DLNA с настоящими приложениями (TikTok, Bilibili и т. п.); воспроизведение в фоне при выключенном экране телефона; **Jellyfin, Emby, Plex и Xtream VOD на настоящих серверах** — проверены только тестами и имитацией; Plex — вход кодом и выбор адреса сервера не проверялись вовсе.
+- **Проверено 2026-10-21** (iPhone 15 Pro, iOS 27.0.1, CarPlay Simulator «Standard Video Playback»): CarIPTV на главном экране машины, вкладки Favorites / Recent / Screen, выбор канала — видео показывает система, переключение каналов. `supportsVideoPlayback=true`, **`window=false`** — своего окна video-приложению CarPlay не даёт, зеркалирование через окно в машине невозможно. На iOS 26.5 в той же конфигурации `supportsVideoPlayback=false`.
+- **Проверено 2026-10-22** (iPhone, iOS 27.0.1, CarPlay Simulator): обычный MP4 и ролик YouTube через «Watch in Car» доходят до машины через `HLSPackager` — скачивание, нарезка видео и звука отдельными плейлистами, картинка в машине. Ролик YouTube — только 360p (itag 18): без MediaSource сайт отдаёт один файл со звуком.
+- **Видео из браузера:** скрипт `WebVideo.script` находит играющий `<video>` и передаёт адрес нашему плееру (плашка «Watch in Car»). MediaSource от страниц спрятан — иначе YouTube собирает видео из кусков (`blob:`) и адреса нет; без него отдаёт обычный MP4 (itag 18, 360p), который идёт через `HLSPackager`. App Store 5.2.3 — риск (воспроизведение чужих сервисов), решение владельца.
+- **DLNA на iPhone не запустился:** SSDP на порту 1900 — `Address already in use` (2026-10-21). Причина не выяснена: нет multicast-разрешения или порт занят другим приложением (на телефоне стоит CarTV со своим DLNA).
+- **Переупаковка: чего нет.** Сетевой файл скачивается целиком до начала показа — для длинного ролика или фильма VOD Xtream (гигабайты) это долго; нужно начинать с уже скачанной части. Локальные видео в CarPlay не выбрать (нет вкладки), через переупаковщик идут только при запуске с телефона — на устройстве не проверено.
+- **Не проверено:** зеркалирование на устройстве; DLNA с настоящими приложениями (TikTok, Bilibili и т. п.); воспроизведение в фоне при выключенном экране телефона; **Jellyfin, Emby, Plex и Xtream VOD на настоящих серверах** — проверены только тестами и имитацией; Plex — вход кодом и выбор адреса сервера не проверялись вовсе.
 - **Потоки M3U и Xtream:** только то, что играет AVPlayer (HLS, MP4). MPEG-TS напрямую, MKV в фильмах Xtream и часть кодеков — нет; нужен второй движок (VLCKit/MPVKit) — решение владельца, новая зависимость. Серверы Jellyfin/Emby/Plex это обходят своим HLS.
 - **Xtream:** нет каталога архива; фильмы и сериалы загружаются заново при каждом открытии раздела.
 - Live TV из Jellyfin/Emby/Plex, выбор языка, локализации, Live Activity.
