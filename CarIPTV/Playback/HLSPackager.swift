@@ -7,12 +7,15 @@ import UniformTypeIdentifiers
 ///
 /// Nothing is re-encoded: `AVAssetReader` hands over the compressed samples and `AVAssetWriter`
 /// (profile `mpeg4AppleHLS`) cuts them into fMP4 segments. A writer cannot pass video and audio
-/// through together while segmenting (-11875), so each track gets its own reader and writer and the
-/// master playlist joins them (video + an audio rendition), as streaming services do.
-/// Segments go to a temporary folder and are served by `LocalHLSServer` while the rest is still being
-/// cut, as EVENT playlists that become complete (`#EXT-X-ENDLIST`) at the end.
+/// through together while segmenting (-11875), so each track gets its own writer and the master
+/// playlist joins them (video + an audio rendition), as streaming services do. Segments go to a
+/// temporary folder and are served by `LocalHLSServer` while the rest is still being cut, as EVENT
+/// playlists that become complete (`#EXT-X-ENDLIST`) at the end.
 ///
-/// `AVAssetReader` reads only local files, so a web file is downloaded first (`onProgress`).
+/// `AVAssetReader` reads only local files, so a web file is downloaded (`SourceFile`) and cut while
+/// it arrives: each pass reads up to a key frame safely behind the downloaded part, the next pass
+/// resumes from that key frame. A file whose index (`moov`) is at the end can only start once it
+/// is all here.
 final class HLSPackager: @unchecked Sendable {
     enum PackagerError: LocalizedError {
         case noVideo
@@ -26,24 +29,27 @@ final class HLSPackager: @unchecked Sendable {
             case .downloadFailed: String(localized: "The video could not be downloaded.")
             }
         }
+
+        static let unreadable = PackagerError.cannotRead(String(localized: "This video can't be read."))
+        static let unwritable = PackagerError.cannotRead(String(localized: "This video can't be prepared for the car display."))
     }
 
     let id = UUID()
     let directory: URL
 
-    private let source: URL
+    private let source: URL?
     private let options: [String: Any]?
     private let lock = NSLock()
-    private let queue = DispatchQueue(label: "weappico.cariptv.hls")
     // Guarded by `lock`.
+    private var file: SourceFile?
     private var renditions: [Rendition] = []
+    private var tasks: [Task<Void, Never>] = []
     private var bandwidth = 5_000_000
     private var failure: Error?
     private var isCancelled = false
     private var waiters: [CheckedContinuation<Void, Error>] = []
-    private var download: URLSessionTask?
 
-    /// Download progress of a web file, 0…1, called often and from any thread.
+    /// Download progress of a web file, 0…1, from any thread.
     var onProgress: (@Sendable (Double) -> Void)?
 
     /// Segment length asked of the writer; video segments end at the next key frame after it.
@@ -52,6 +58,14 @@ final class HLSPackager: @unchecked Sendable {
     init(source: URL, options: [String: Any]? = nil) {
         self.source = source
         self.options = options
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("hls-\(id.uuidString)", isDirectory: true)
+    }
+
+    /// Packages a file someone else fills (tests feed it piece by piece).
+    init(file: SourceFile) {
+        source = nil
+        options = nil
+        self.file = file
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("hls-\(id.uuidString)", isDirectory: true)
     }
 
@@ -72,32 +86,42 @@ final class HLSPackager: @unchecked Sendable {
     /// Starts cutting and returns once every track has its first segment (or is done, if shorter).
     func start() async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let local = source.isFileURL ? source : try await downloadSource()
-        let asset = AVURLAsset(url: local)
+        let file = try lock.withLock { () -> SourceFile in
+            if let file { return file }
+            let made = try makeSource()
+            file = made
+            return made
+        }
+        file.onProgress = { [weak self] fraction in self?.onProgress?(fraction) }
+
+        let asset = try await openAsset(file)
         let tracks = try await asset.load(.tracks)
         guard let video = tracks.first(where: { $0.mediaType == .video }) else { throw PackagerError.noVideo }
-        var made = [Rendition(kind: .video, track: video, format: try await video.load(.formatDescriptions).first,
-                              transform: try await video.load(.preferredTransform), directory: directory)]
+        var made = [try await Rendition(kind: .video, track: video, directory: directory)]
         if let audio = tracks.first(where: { $0.mediaType == .audio }) {
-            made.append(Rendition(kind: .audio, track: audio, format: try await audio.load(.formatDescriptions).first,
-                                  transform: .identity, directory: directory))
+            made.append(try await Rendition(kind: .audio, track: audio, directory: directory))
         }
-        let seconds = try await asset.load(.duration).seconds
-        let bytes = (try? local.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        let estimate = seconds > 0 && bytes > 0 ? Int(Double(bytes) * 8 / seconds * 1.2) : 5_000_000
+        let duration = try await asset.load(.duration).seconds
+        let expected = file.isComplete ? (try? file.url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) : nil
+        let bytes = expected ?? Int64(Double(file.receivedBytes) / max(file.fraction, 0.01))
+        let estimate = duration > 0 && bytes > 0 ? Int(Double(bytes) * 8 / duration * 1.2) : 5_000_000
+
+        let tasks = made.map { rendition in
+            rendition.onChange = { [weak self] in self?.resumeWaitersIfReady() }
+            return Task.detached(priority: .userInitiated) { [weak self] in
+                do {
+                    try await self?.cut(rendition, from: file, duration: duration)
+                    Log.playback.info("hls: \(rendition.kind.rawValue, privacy: .public) done, \(rendition.segmentCount) segments")
+                    self?.resumeWaitersIfReady()
+                } catch {
+                    self?.finish(with: error)
+                }
+            }
+        }
         lock.withLock {
             renditions = made
             bandwidth = estimate
-        }
-        for rendition in made {
-            rendition.onChange = { [weak self] in self?.resumeWaitersIfReady() }
-            queue.async { [self] in
-                do {
-                    try run(rendition, asset: asset)
-                } catch {
-                    finish(with: error)
-                }
-            }
+            self.tasks = tasks
         }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             lock.lock()
@@ -112,26 +136,28 @@ final class HLSPackager: @unchecked Sendable {
         }
     }
 
-    private var wasCancelled: Bool { lock.withLock { isCancelled } }
-
     func cancel() {
-        let (download, renditions) = lock.withLock { () -> (URLSessionTask?, [Rendition]) in
+        let (file, tasks) = lock.withLock { () -> (SourceFile?, [Task<Void, Never>]) in
             isCancelled = true
-            return (self.download, self.renditions)
+            return (self.file, self.tasks)
         }
-        download?.cancel()
-        queue.async { [self] in
-            for rendition in renditions {
-                rendition.reader?.cancelReading()
-                rendition.writer?.cancelWriting()
-            }
+        file?.cancel()
+        tasks.forEach { $0.cancel() }
+        finish(with: CancellationError())
+        // The writers stop at their next sample; give them a moment before the folder goes.
+        let directory = directory
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
             try? FileManager.default.removeItem(at: directory)
         }
-        finish(with: CancellationError())
     }
 
-    /// Downloads a web file into the packager's folder, with the page's user agent and cookies.
-    private func downloadSource() async throws -> URL {
+    private var wasCancelled: Bool { lock.withLock { isCancelled } }
+
+    /// A local file as it is; a web file downloads into the packager's folder with the page's
+    /// user agent and cookies.
+    private func makeSource() throws -> SourceFile {
+        guard let source else { throw PackagerError.unreadable }
+        if source.isFileURL { return SourceFile(local: source) }
         var request = URLRequest(url: source, timeoutInterval: 60)
         if let agent = options?[AVURLAssetHTTPUserAgentKey] as? String {
             request.setValue(agent, forHTTPHeaderField: "User-Agent")
@@ -141,86 +167,90 @@ final class HLSPackager: @unchecked Sendable {
                 request.setValue(value, forHTTPHeaderField: name)
             }
         }
-        let delegate = DownloadDelegate(
-            created: { [weak self] task in
-                guard let self else { return }
-                let cancelled = lock.withLock { () -> Bool in
-                    self.download = task
-                    return self.isCancelled
-                }
-                if cancelled { task.cancel() }
-            },
-            progress: { [weak self] fraction in self?.onProgress?(fraction) }
-        )
-        let (temporary, response) = try await URLSession.shared.download(for: request, delegate: delegate)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            try? FileManager.default.removeItem(at: temporary)
-            throw PackagerError.downloadFailed
-        }
         // The extension tells AVFoundation the container; web files without one are MP4.
         let ext = ["mov", "m4v"].contains(source.pathExtension.lowercased()) ? source.pathExtension.lowercased() : "mp4"
-        let file = directory.appendingPathComponent("source.\(ext)")
-        try FileManager.default.moveItem(at: temporary, to: file)
-        Log.playback.info("hls: downloaded \((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) bytes")
-        return file
+        return try SourceFile.download(request, to: directory.appendingPathComponent("source.\(ext)"))
     }
 
-    /// Copies one track into its own segmented writer.
-    private func run(_ rendition: Rendition, asset: AVAsset) throws {
-        let reader = try AVAssetReader(asset: asset)
-        // nil settings: compressed samples are copied, not decoded.
-        let output = AVAssetReaderTrackOutput(track: rendition.track, outputSettings: nil)
-        output.alwaysCopiesSampleData = false
+    /// The asset once its index has arrived: at the start of most web files, at the end of some.
+    private func openAsset(_ file: SourceFile) async throws -> AVURLAsset {
+        var triedAt: Int64?
+        while true {
+            if wasCancelled { throw CancellationError() }
+            if let error = file.error { throw error }
+            let complete = file.isComplete
+            let received = file.receivedBytes
+            // Try at once, then again only after a useful amount of new data.
+            if complete || triedAt.map({ received - $0 >= 128 * 1024 }) ?? (received > 0) {
+                triedAt = received
+                let asset = AVURLAsset(url: file.url)
+                if (try? await asset.load(.tracks).isEmpty) == false, (try? await asset.load(.duration).seconds).map({ $0 > 0 }) == true {
+                    return asset
+                }
+                if complete {
+                    throw PackagerError.unreadable
+                }
+            }
+            await file.waitForChange()
+        }
+    }
+
+    /// How far behind the download edge a pass stops: the last bytes may be a half-written sample.
+    private static func margin(for duration: Double) -> Double {
+        max(6, duration * 0.03)
+    }
+
+    /// Copies one track into its segmented writer. The writer pulls samples on the track's own
+    /// queue (`requestMediaDataWhenReady`); pushing them from a task made it fail mid-segment (-11876).
+    private func cut(_ rendition: Rendition, from file: SourceFile, duration: Double) async throws {
         let writer = AVAssetWriter(contentType: UTType(AVFileType.mp4.rawValue)!)
         writer.outputFileTypeProfile = .mpeg4AppleHLS
         writer.preferredOutputSegmentInterval = CMTime(seconds: Self.segmentInterval, preferredTimescale: 1)
         writer.initialSegmentStartTime = .zero
         writer.delegate = rendition
-        let input = AVAssetWriterInput(mediaType: rendition.track.mediaType, outputSettings: nil, sourceFormatHint: rendition.format)
+        // nil settings: compressed samples are copied, not decoded.
+        let input = AVAssetWriterInput(mediaType: rendition.kind.mediaType, outputSettings: nil, sourceFormatHint: rendition.format)
         input.expectsMediaDataInRealTime = false
         input.transform = rendition.transform
-        guard reader.canAdd(output), writer.canAdd(input) else {
-            throw PackagerError.cannotRead(String(localized: "This video can't be prepared for the car display."))
-        }
-        reader.add(output)
+        guard writer.canAdd(input) else { throw PackagerError.unwritable }
         writer.add(input)
-        rendition.reader = reader
-        rendition.writer = writer
-
-        guard reader.startReading() else {
-            throw reader.error ?? PackagerError.cannotRead(String(localized: "This video can't be read."))
-        }
-        guard writer.startWriting() else {
-            throw writer.error ?? PackagerError.cannotRead(String(localized: "This video can't be prepared for the car display."))
-        }
+        guard writer.startWriting() else { throw writer.error ?? PackagerError.unwritable }
         writer.startSession(atSourceTime: .zero)
 
-        input.requestMediaDataWhenReady(on: queue) { [weak self] in
-            while input.isReadyForMoreMediaData {
-                guard self?.wasCancelled == false, let sample = output.copyNextSampleBuffer(), input.append(sample) else {
-                    input.markAsFinished()
-                    self?.complete(rendition, reader: reader, writer: writer)
-                    return
+        let feeder = SampleFeeder(trackID: rendition.trackID, file: file, duration: duration,
+                                  margin: Self.margin(for: duration)) { [weak self] in self?.wasCancelled ?? true }
+        let queue = DispatchQueue(label: "weappico.cariptv.hls.\(rendition.kind.rawValue)")
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                input.requestMediaDataWhenReady(on: queue) {
+                    while input.isReadyForMoreMediaData {
+                        switch feeder.next() {
+                        case .sample(let sample):
+                            if !input.append(sample) {
+                                input.markAsFinished()
+                                feeder.stop()
+                                continuation.resume(throwing: writer.error ?? PackagerError.unwritable)
+                                return
+                            }
+                        case .end:
+                            input.markAsFinished()
+                            continuation.resume()
+                            return
+                        case .failure(let error):
+                            input.markAsFinished()
+                            continuation.resume(throwing: error)
+                            return
+                        }
+                    }
                 }
             }
+        } catch {
+            writer.cancelWriting()
+            throw error
         }
-    }
-
-    private func complete(_ rendition: Rendition, reader: AVAssetReader, writer: AVAssetWriter) {
-        guard !wasCancelled else { return }
-        if reader.status == .failed {
-            finish(with: reader.error ?? PackagerError.cannotRead(String(localized: "This video can't be read.")))
-            return
-        }
-        writer.finishWriting { [self] in
-            if writer.status == .failed {
-                finish(with: writer.error ?? PackagerError.cannotRead(String(localized: "This video can't be prepared for the car display.")))
-                return
-            }
-            rendition.markFinished()
-            Log.playback.info("hls: \(rendition.kind.rawValue, privacy: .public) done, \(rendition.segmentCount) segments")
-            resumeWaitersIfReady()
-        }
+        await writer.finishWriting()
+        if writer.status == .failed { throw writer.error ?? PackagerError.unwritable }
+        rendition.markFinished()
     }
 
     private func finish(with error: Error) {
@@ -229,12 +259,15 @@ final class HLSPackager: @unchecked Sendable {
             defer { waiters = [] }
             return waiters
         }
+        if !(error is CancellationError) {
+            Log.playback.error("hls: \(String(describing: error), privacy: .public)")
+        }
         pending.forEach { $0.resume(throwing: error) }
     }
 
     private func resumeWaitersIfReady() {
         let pending = lock.withLock { () -> [CheckedContinuation<Void, Error>] in
-            guard failure == nil, renditions.allSatisfy(\.hasStarted) else { return [] }
+            guard failure == nil, !renditions.isEmpty, renditions.allSatisfy(\.hasStarted) else { return [] }
             defer { waiters = [] }
             return waiters
         }
@@ -247,6 +280,11 @@ final class HLSPackager: @unchecked Sendable {
 
     var segmentCount: Int { video?.segmentCount ?? 0 }
     var totalDuration: Double { video?.totalDuration ?? 0 }
+    /// Why packaging stopped, unless it was cancelled.
+    var error: Error? {
+        lock.withLock { failure is CancellationError ? nil : failure }
+    }
+
     /// Every track is cut to the end.
     var isComplete: Bool { lock.withLock { !renditions.isEmpty && renditions.allSatisfy(\.isFinished) } }
 
@@ -275,33 +313,214 @@ final class HLSPackager: @unchecked Sendable {
     }
 }
 
+/// Hands one track's samples to its writer, pass by pass as the file arrives. Runs on the track's
+/// queue and blocks it while waiting for more of the download.
+///
+/// Each pass reads up to a key frame safely behind the downloaded part (the last bytes may be a
+/// half-written sample); the next pass resumes from that key frame. A pass that runs into missing
+/// bytes resumes from the last key frame it wrote and skips the samples already written after it.
+/// Skipping goes by position in decode order, not by timestamps: B-frames may carry no decode time.
+private final class SampleFeeder: @unchecked Sendable {
+    enum Outcome {
+        case sample(CMSampleBuffer)
+        case end
+        case failure(Error)
+    }
+
+    private let trackID: CMPersistentTrackID
+    private let file: SourceFile
+    private let duration: Double
+    private let margin: Double
+    private let isCancelled: () -> Bool
+
+    private var reader: AVAssetReader?
+    private var output: AVAssetReaderTrackOutput?
+    private var passIsFinal = false
+    private var edge = Double.infinity
+    private var start = CMTime.zero
+    /// The key frame the next pass picks up at, and how many samples from it on are already written.
+    private var resumeAt: CMTime?
+    private var resumeSkip = 0
+    private var pendingSkip = 0
+    private var lastKeyFrame: CMTime?
+    /// Samples written from the last key frame on, including it.
+    private var sinceKeyFrame = 0
+
+    init(trackID: CMPersistentTrackID, file: SourceFile, duration: Double, margin: Double, isCancelled: @escaping () -> Bool) {
+        self.trackID = trackID
+        self.file = file
+        self.duration = duration
+        self.margin = margin
+        self.isCancelled = isCancelled
+    }
+
+    func stop() {
+        reader?.cancelReading()
+        reader = nil
+        output = nil
+    }
+
+    func next() -> Outcome {
+        while true {
+            if isCancelled() {
+                stop()
+                return .failure(CancellationError())
+            }
+            if let error = file.error {
+                stop()
+                return .failure(error)
+            }
+            guard let output else {
+                switch openPass() {
+                case .ready: continue
+                case .wait: waitForMore()
+                case .failed(let error): return .failure(error)
+                }
+                continue
+            }
+            guard let sample = output.copyNextSampleBuffer() else {
+                let status = reader?.status
+                stop()
+                if passIsFinal {
+                    if status == .completed { return .end }
+                    return .failure(reader?.error ?? HLSPackager.PackagerError.unreadable)
+                }
+                // Ran into bytes not here yet: resume from the last key frame once more arrives.
+                // Nothing written yet: simply start over.
+                if let lastKeyFrame {
+                    resume(at: lastKeyFrame, skipping: sinceKeyFrame)
+                }
+                waitForMore()
+                continue
+            }
+            let presentation = sample.presentationTimeStamp
+            let isKeyFrame = sample.isSyncSample
+            if let target = resumeAt {
+                // A pass reads from a second early: wait for the key frame it resumes at.
+                guard isKeyFrame, presentation == target else { continue }
+                resumeAt = nil
+                pendingSkip = resumeSkip
+            }
+            if !passIsFinal, isKeyFrame, presentation.seconds > edge, pendingSkip == 0 {
+                // The next pass starts exactly at this key frame.
+                resume(at: presentation, skipping: 0)
+                stop()
+                continue
+            }
+            if pendingSkip > 0 {
+                pendingSkip -= 1
+                continue
+            }
+            if isKeyFrame {
+                lastKeyFrame = presentation
+                sinceKeyFrame = 1
+            } else {
+                sinceKeyFrame += 1
+            }
+            return .sample(sample)
+        }
+    }
+
+    private func resume(at keyFrame: CMTime, skipping count: Int) {
+        start = keyFrame
+        resumeAt = keyFrame
+        resumeSkip = count
+    }
+
+    private enum Pass {
+        case ready
+        case wait
+        case failed(Error)
+    }
+
+    private func openPass() -> Pass {
+        let complete = file.isComplete
+        edge = complete ? .infinity : file.fraction * duration - margin
+        if !complete, edge < start.seconds + HLSPackager.segmentInterval * 2 { return .wait }
+        let asset = AVURLAsset(url: file.url)
+        let semaphore = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var track: AVAssetTrack?
+        Task {
+            track = try? await asset.loadTrack(withTrackID: trackID)
+            semaphore.signal()
+        }
+        semaphore.wait()
+        guard let track else { return complete ? .failed(HLSPackager.PackagerError.unreadable) : .wait }
+        do {
+            let reader = try AVAssetReader(asset: asset)
+            // A range starting right at a key frame can drop that frame (it did at 0): read from a
+            // second earlier and let the decode-time check skip what is already written.
+            if start > .zero {
+                let from = CMTimeMaximum(.zero, start - CMTime(seconds: 1, preferredTimescale: 600))
+                reader.timeRange = CMTimeRange(start: from, duration: .positiveInfinity)
+            }
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+            output.alwaysCopiesSampleData = false
+            guard reader.canAdd(output) else { return .failed(HLSPackager.PackagerError.unreadable) }
+            reader.add(output)
+            guard reader.startReading() else {
+                return complete ? .failed(reader.error ?? HLSPackager.PackagerError.unreadable) : .wait
+            }
+            self.reader = reader
+            self.output = output
+            passIsFinal = complete
+            return .ready
+        } catch {
+            return complete ? .failed(error) : .wait
+        }
+    }
+
+    /// Blocks the track's queue until the download moves on.
+    private func waitForMore() {
+        let semaphore = DispatchSemaphore(value: 0)
+        let file = file
+        Task {
+            await file.waitForChange()
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+}
+
+private extension CMSampleBuffer {
+    /// Video samples carry `NotSync` unless they are key frames; audio samples are all sync.
+    var isSyncSample: Bool {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(self, createIfNecessary: false) as? [[CFString: Any]],
+              let first = attachments.first else { return true }
+        return !(first[kCMSampleAttachmentKey_NotSync] as? Bool ?? false)
+    }
+}
+
 /// One track of the packaged file: its writer's segments on disk and its media playlist.
 private final class Rendition: NSObject, AVAssetWriterDelegate, @unchecked Sendable {
     enum Kind: String {
         case video
         case audio
+
+        var mediaType: AVMediaType { self == .video ? .video : .audio }
     }
 
     let kind: Kind
-    let track: AVAssetTrack
+    /// The track is looked up by id in every pass: each pass opens the grown file anew.
+    let trackID: CMPersistentTrackID
     let format: CMFormatDescription?
     let transform: CGAffineTransform
     let directory: URL
     var onChange: (() -> Void)?
-    // Used on the packager's queue.
-    var reader: AVAssetReader?
-    var writer: AVAssetWriter?
 
     private let lock = NSLock()
     private var hasInit = false
     private var durations: [Double] = []
     private var finished = false
+    /// The playlist type the player saw first. HLS forbids changing it mid-stream: the car kept
+    /// showing only the part it had seen when EVENT turned into VOD.
+    private var playlistType: String?
 
-    init(kind: Kind, track: AVAssetTrack, format: CMFormatDescription?, transform: CGAffineTransform, directory: URL) {
+    init(kind: Kind, track: AVAssetTrack, directory: URL) async throws {
         self.kind = kind
-        self.track = track
-        self.format = format
-        self.transform = transform
+        trackID = track.trackID
+        format = try await track.load(.formatDescriptions).first
+        transform = kind == .video ? try await track.load(.preferredTransform) : .identity
         self.directory = directory
     }
 
@@ -336,9 +555,14 @@ private final class Rendition: NSObject, AVAssetWriterDelegate, @unchecked Senda
         }
     }
 
-    /// The media playlist as far as it is cut. EVENT until the end: the player keeps reloading it.
+    /// The media playlist as far as it is cut. VOD if it was complete when first asked for;
+    /// otherwise EVENT for good, ending with `#EXT-X-ENDLIST` — the player keeps reloading it.
     func playlist() -> String {
-        let (durations, finished) = lock.withLock { (durations, self.finished) }
+        let (durations, finished, type) = lock.withLock { () -> ([Double], Bool, String) in
+            let type = playlistType ?? (finished ? "VOD" : "EVENT")
+            playlistType = type
+            return (durations, finished, type)
+        }
         // Fixed while the playlist grows (HLS forbids changing it); segments rarely run past it.
         let target = max(10, Int((durations.max() ?? 0).rounded(.up)))
         var lines = [
@@ -346,7 +570,7 @@ private final class Rendition: NSObject, AVAssetWriterDelegate, @unchecked Senda
             "#EXT-X-VERSION:7",
             "#EXT-X-TARGETDURATION:\(target)",
             "#EXT-X-MEDIA-SEQUENCE:0",
-            "#EXT-X-PLAYLIST-TYPE:\(finished ? "VOD" : "EVENT")",
+            "#EXT-X-PLAYLIST-TYPE:\(type)",
             "#EXT-X-INDEPENDENT-SEGMENTS",
             // An EVENT playlist would otherwise start near its end, like live TV.
             "#EXT-X-START:TIME-OFFSET=0,PRECISE=YES",
@@ -374,25 +598,6 @@ private final class Rendition: NSObject, AVAssetWriterDelegate, @unchecked Senda
     }
 }
 
-/// Reports the download task as soon as it exists (for cancelling) and its progress.
-private final class DownloadDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    private let created: (URLSessionTask) -> Void
-    private let progress: (Double) -> Void
-    private var observation: NSKeyValueObservation?
-
-    init(created: @escaping (URLSessionTask) -> Void, progress: @escaping (Double) -> Void) {
-        self.created = created
-        self.progress = progress
-    }
-
-    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
-        created(task)
-        let progress = progress
-        observation = task.progress.observe(\.fractionCompleted) { value, _ in
-            progress(value.fractionCompleted)
-        }
-    }
-}
 
 /// Serves packaged HLS to our own player on `127.0.0.1`: `/hls/<packager id>/index.m3u8` and the
 /// video and audio playlists and segments it names.
@@ -459,13 +664,21 @@ final class LocalHLSServer: @unchecked Sendable {
         guard parts.count == 3, parts[0] == "hls", let id = UUID(uuidString: String(parts[1])),
               let packager = lock.withLock({ packagers[id] }) else { return .empty(404) }
         let name = String(parts[2])
+        let response: HTTPServer.Response
         if name.hasSuffix(".m3u8") {
-            guard let playlist = packager.playlist(named: name) else { return .empty(404) }
-            return HTTPServer.Response(status: 200, headers: ["Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-cache"],
-                                       body: Data(playlist.utf8))
+            if let playlist = packager.playlist(named: name) {
+                response = HTTPServer.Response(status: 200, headers: ["Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-cache"],
+                                               body: Data(playlist.utf8))
+            } else {
+                response = .empty(404)
+            }
+        } else if let data = packager.file(named: name) {
+            let type = name.hasSuffix(".mp4") ? "video/mp4" : "video/iso.segment"
+            response = HTTPServer.Response(status: 200, headers: ["Content-Type": type], body: data)
+        } else {
+            response = .empty(404)
         }
-        guard let data = packager.file(named: name) else { return .empty(404) }
-        let type = name.hasSuffix(".mp4") ? "video/mp4" : "video/iso.segment"
-        return HTTPServer.Response(status: 200, headers: ["Content-Type": type], body: data)
+        Log.playback.info("hls server: \(request.method, privacy: .public) \(name, privacy: .public) \(response.status) \(response.body.count) B from \(request.remote ?? "?", privacy: .public)")
+        return response
     }
 }

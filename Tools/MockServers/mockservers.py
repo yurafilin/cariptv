@@ -83,6 +83,10 @@ def playlist():
         # A plain MP4, directly and behind a redirect (as googlevideo.com serves YouTube files).
         '#EXTINF:-1 group-title="Files",Progressive MP4', BASE + "/media/test.mp4",
         '#EXTINF:-1 group-title="Files",Redirected MP4', BASE + "/redirect/test.mp4",
+        # Controls for CarPlay: Apple's stream and our packaged format, both over plain HTTP from the Mac
+        # (make them with packagehls.swift and the commands in CLAUDE.md).
+        '#EXTINF:-1 group-title="Controls",Apple HLS over HTTP', BASE + "/media/applehls/prog_index.m3u8",
+        '#EXTINF:-1 group-title="Controls",Packaged HLS over HTTP', BASE + "/media/packaged/index.m3u8",
         "",
     ])
 
@@ -128,7 +132,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             f.seek(start)
             body = f.read(end - start + 1)
         self.send_response(206 if m else 200)
-        self.send_header("Content-Type", "video/mp4")
+        types = {".m3u8": "application/vnd.apple.mpegurl", ".ts": "video/mp2t", ".m4s": "video/iso.segment"}
+        self.send_header("Content-Type", types.get(os.path.splitext(path)[1], "video/mp4"))
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(len(body)))
         if m:
@@ -138,7 +143,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_HEAD(self):
-        m = re.match(r"^/media/([\w.-]+)$", urlparse(self.path).path)
+        m = re.match(r"^/media/((?:[\w-]+/)?[\w.-]+)$", urlparse(self.path).path)
         if m:
             return self.send_file(os.path.join(MEDIA, m.group(1)))
         self.send_json({}, 404)
@@ -178,7 +183,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     {"title": b64(name), "start_timestamp": str(now), "stop_timestamp": str(now + 1800)},
                     {"title": b64("Up Next: " + name), "start_timestamp": str(now + 1800), "stop_timestamp": str(now + 3600)}]})
             return self.send_json(XTREAM.get(q.get("action"), []))
-        m = re.match(r"^/media/([\w.-]+)$", path)
+        m = re.match(r"^/media/((?:[\w-]+/)?[\w.-]+)$", path)
         if m:
             return self.send_file(os.path.join(MEDIA, m.group(1)))
         m = re.match(r"^/redirect/([\w.-]+)$", path)

@@ -10,6 +10,8 @@ final class HTTPServer {
         /// Header names lowercased.
         var headers: [String: String]
         var body: Data
+        /// Who asked, for logs.
+        var remote: String?
     }
 
     struct Response {
@@ -119,7 +121,8 @@ final class HTTPServer {
             guard let self else { return }
             var buffer = buffer
             if let data { buffer.append(data) }
-            if let request = Self.parse(buffer) {
+            if var request = Self.parse(buffer) {
+                request.remote = connection.endpoint.debugDescription
                 handler(request) { response in
                     connection.send(content: response.serialized(), completion: .contentProcessed { _ in
                         connection.cancel()

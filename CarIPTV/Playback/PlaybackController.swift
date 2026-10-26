@@ -30,6 +30,8 @@ final class PlaybackController {
     @ObservationIgnored private var pendingStart: Double?
     /// Repackages the current file into HLS for the car display.
     @ObservationIgnored private var packager: HLSPackager?
+    /// The packager whose growing playlist the car already refused once.
+    @ObservationIgnored private var retriedPackager: HLSPackager?
 
     private init() {
         // CarPlay video apps must support AirPlay video: in cars that show video the system
@@ -78,6 +80,9 @@ final class PlaybackController {
         updateNowPlaying()
     }
 
+    /// How long a packaged file may take to be cut completely before playback starts anyway.
+    private static let completeWait: Duration = .seconds(20)
+
     /// Repackages `source` into HLS, then plays the local playlist.
     private func playPackaged(_ source: URL, options: [String: Any]?) {
         let packager = HLSPackager(source: source, options: options)
@@ -96,6 +101,12 @@ final class PlaybackController {
         Task {
             do {
                 try await packager.start()
+                // Most web videos are cut in seconds: wait a little and hand the car a complete
+                // playlist, with the whole length to scrub. Longer ones start while still growing.
+                let deadline = ContinuousClock.now + Self.completeWait
+                while !packager.isComplete, packager.error == nil, ContinuousClock.now < deadline, self.packager === packager {
+                    try await Task.sleep(for: .milliseconds(200))
+                }
                 let url = try await LocalHLSServer.shared.url(for: packager)
                 guard self.packager === packager else { return }
                 Log.playback.info("hls: playing \(packager.segmentCount) segments so far")
@@ -109,15 +120,37 @@ final class PlaybackController {
         }
     }
 
+    /// Plays the packaged stream again once it is cut to the end (a VOD playlist), from where it was.
+    private func replayWhenComplete(_ packager: HLSPackager) {
+        let position = player.currentTime().seconds
+        state = .loading
+        Task {
+            while !packager.isComplete {
+                guard self.packager === packager, packager.error == nil else { return }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            guard self.packager === packager, let url = try? await LocalHLSServer.shared.url(for: packager) else { return }
+            Log.playback.info("hls: car refused the growing playlist; playing it complete, \(packager.segmentCount) segments")
+            if pendingStart == nil, position.isFinite, position > 1 {
+                pendingStart = position
+            }
+            startItem(AVURLAsset(url: url))
+        }
+    }
+
     private func startItem(_ asset: AVURLAsset) {
         let item = AVPlayerItem(asset: asset)
         itemObservation = item.observe(\.status, options: [.new]) { item, _ in
             let status = item.status
             if let error = item.error {
                 Log.playback.error("item error: \(String(describing: error))")
+                for event in item.errorLog()?.events.suffix(5) ?? [] {
+                    Log.playback.error("item log: \(event.errorStatusCode) \(event.errorDomain, privacy: .public) \(event.errorComment ?? "", privacy: .public) \(event.uri ?? "", privacy: .public)")
+                }
             }
             let message = Self.describe(item.error)
-            Task { @MainActor in PlaybackController.shared.itemStatusChanged(status, message: message) }
+            let code = (item.error as NSError?)?.code
+            Task { @MainActor in PlaybackController.shared.itemStatusChanged(status, message: message, code: code) }
         }
         player.replaceCurrentItem(with: item)
         player.play()
@@ -193,9 +226,15 @@ final class PlaybackController {
         return String(localized: "This video can't be played. Its format may not be supported.")
     }
 
-    private func itemStatusChanged(_ status: AVPlayerItem.Status, message: String?) {
+    private func itemStatusChanged(_ status: AVPlayerItem.Status, message: String?, code: Int?) {
         switch status {
         case .failed:
+            // The car refused the packaged stream (-11870): try once more with the playlist complete.
+            if code == AVError.Code.externalPlaybackNotSupportedForAsset.rawValue, let packager, retriedPackager !== packager {
+                retriedPackager = packager
+                replayWhenComplete(packager)
+                return
+            }
             state = .failed(message ?? String(localized: "This video can't be played. Its format may not be supported."))
         case .readyToPlay:
             if let start = pendingStart {

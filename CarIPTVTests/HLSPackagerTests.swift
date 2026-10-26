@@ -64,6 +64,59 @@ struct HLSPackagerTests {
         _ = player
     }
 
+    /// A web file with its index at the start plays before it has fully arrived.
+    @Test func startsBeforeTheDownloadEnds() async throws {
+        let clip = try await TestClip.make(seconds: 30)
+        defer { try? FileManager.default.removeItem(at: clip) }
+        let data = try Data(contentsOf: clip)
+        let growing = FileManager.default.temporaryDirectory.appendingPathComponent("growing-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: growing) }
+        let file = try SourceFile(growing: growing, expectedLength: Int64(data.count))
+        let cut = data.count * 7 / 10
+        try file.append(data.prefix(cut))
+
+        let packager = HLSPackager(file: file)
+        defer { packager.cancel() }
+        try await packager.start()
+        #expect(!packager.isComplete)
+        #expect(packager.segmentCount >= 1)
+        #expect(packager.totalDuration < 25)
+
+        try file.append(data.suffix(from: cut))
+        file.finish()
+        try await waitUntil { packager.isComplete }
+        #expect(abs(packager.totalDuration - 30) < 1)
+
+        // Passes join without gaps: the result plays as one 30 s video.
+        let url = try await LocalHLSServer.shared.url(for: packager)
+        let duration = try await AVURLAsset(url: url).load(.duration).seconds
+        #expect(abs(duration - 30) < 1)
+    }
+
+    /// With the index at the end nothing can be read before the last byte.
+    @Test func waitsForIndexAtTheEnd() async throws {
+        let clip = try await TestClip.make(seconds: 10, fastStart: false)
+        defer { try? FileManager.default.removeItem(at: clip) }
+        let data = try Data(contentsOf: clip)
+        let growing = FileManager.default.temporaryDirectory.appendingPathComponent("growing-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: growing) }
+        let file = try SourceFile(growing: growing, expectedLength: Int64(data.count))
+        let cut = data.count * 7 / 10
+        try file.append(data.prefix(cut))
+
+        let packager = HLSPackager(file: file)
+        defer { packager.cancel() }
+        let started = Task { try await packager.start() }
+        try await Task.sleep(for: .seconds(1))
+        #expect(packager.segmentCount == 0)
+
+        try file.append(data.suffix(from: cut))
+        file.finish()
+        try await started.value
+        try await waitUntil { packager.isComplete }
+        #expect(abs(packager.totalDuration - 10) < 1)
+    }
+
     @Test func fileWithoutVideoIsRefused() async throws {
         let clip = try await TestClip.make(seconds: 2, video: false)
         defer { try? FileManager.default.removeItem(at: clip) }
@@ -95,9 +148,11 @@ struct HLSPackagerTests {
 
 /// A short MP4 like one recorded on a phone: H.264 video with a key frame every second, AAC audio.
 enum TestClip {
-    static func make(seconds: Int, video: Bool = true) async throws -> URL {
+    /// `fastStart`: the index (`moov`) at the start, as web files have it; otherwise at the end.
+    static func make(seconds: Int, video: Bool = true, fastStart: Bool = true) async throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("clip-\(UUID().uuidString).mp4")
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        writer.shouldOptimizeForNetworkUse = fastStart
         let fps: Int32 = 30
         let width = 320, height = 180
 
