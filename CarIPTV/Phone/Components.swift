@@ -32,7 +32,11 @@ struct ChannelLogo: View {
     var body: some View {
         AsyncImage(url: url.map(LibraryStore.shared.resolvedURL)) { phase in
             if let image = phase.image {
-                image.resizable().scaledToFit().padding(4)
+                // Inner corner = outer − inset (at least 4), so a square logo does not sit sharp
+                // inside the rounded tile.
+                image.resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: max(corner - Self.inset, 4), style: .continuous))
+                    .padding(Self.inset)
             } else {
                 Text(initials)
                     .font(.system(size: size * 0.36, weight: .semibold))
@@ -40,9 +44,12 @@ struct ChannelLogo: View {
             }
         }
         .frame(width: size, height: size)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: size * 0.22))
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.22))
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
     }
+
+    private static let inset: CGFloat = 4
+    private var corner: CGFloat { size * 0.22 }
 
     private var initials: String {
         let words = name.split(separator: " ").prefix(2)
@@ -174,6 +181,19 @@ extension View {
     func miniPlayerInset() -> some View {
         safeAreaInset(edge: .bottom, spacing: 0) {
             MiniPlayerBar()
+        }
+    }
+}
+
+extension View {
+    /// Liquid Glass on iOS 26 and later; a blurred material of the same shape before.
+    /// `interactive`: the glass reacts to touch, for buttons.
+    @ViewBuilder
+    func glassSurface<S: Shape>(in shape: S, interactive: Bool = false) -> some View {
+        if #available(iOS 26, *) {
+            glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        } else {
+            background(.ultraThinMaterial, in: shape)
         }
     }
 }

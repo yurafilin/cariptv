@@ -8,11 +8,8 @@ struct RootView: View {
             Tab("Home", systemImage: "house", value: AppRouter.Tab.home) {
                 HomeView()
             }
-            Tab("Favorites", systemImage: "heart", value: AppRouter.Tab.favorites) {
-                FavoritesView()
-            }
-            Tab("Discover", systemImage: "safari", value: AppRouter.Tab.discover) {
-                DiscoverView()
+            Tab("Downloads", systemImage: "arrow.down.circle", value: AppRouter.Tab.downloads) {
+                DownloadsView()
             }
             Tab("Settings", systemImage: "gearshape", value: AppRouter.Tab.settings) {
                 SettingsView()

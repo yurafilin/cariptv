@@ -167,6 +167,21 @@ final class BrowserModel {
         saveBookmarks()
     }
 
+    /// A site the user typed in: named after its domain unless they gave a name.
+    func addBookmark(url: URL, title: String) {
+        // Already on the start page, suggested or added before.
+        guard !(bookmarks + Self.suggestedSites).contains(where: { $0.url == url }) else { return }
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        bookmarks.append(Bookmark(title: name.isEmpty ? Self.siteName(url) : name, url: url))
+        saveBookmarks()
+    }
+
+    /// "www.example.com" → "example.com".
+    nonisolated static func siteName(_ url: URL) -> String {
+        let host = url.host() ?? url.absoluteString
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
     func remove(_ bookmark: Bookmark) {
         bookmarks.removeAll { $0.id == bookmark.id }
         saveBookmarks()
@@ -176,6 +191,16 @@ final class BrowserModel {
         if let data = try? JSONEncoder().encode(bookmarks) {
             UserDefaults.standard.set(data, forKey: Self.bookmarksKey)
         }
+    }
+
+    /// A website address only — `url(from:)` would turn anything else into a search.
+    nonisolated static func siteURL(from input: String) -> URL? {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.contains(" ") else { return nil }
+        let candidate = text.contains("://") ? text : "https://\(text)"
+        guard let url = URL(string: candidate), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host(), host.contains("."), !host.hasPrefix("."), !host.hasSuffix(".") else { return nil }
+        return url
     }
 
     nonisolated static func url(from input: String) -> URL? {

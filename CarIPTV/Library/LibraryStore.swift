@@ -262,20 +262,7 @@ final class LibraryStore {
         write(recent, "recent.json")
     }
 
-    /// Case- and diacritic-insensitive match on channel name and group, across all sources.
-    func search(_ query: String, limit: Int = 200) -> [LibraryItem] {
-        let query = query.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return [] }
-        var results: [LibraryItem] = []
-        for source in sources {
-            for channel in channels(in: source) where Self.matches(channel, query) {
-                results.append(LibraryItem(sourceID: source.id, channel: channel))
-                if results.count >= limit { return results }
-            }
-        }
-        return results
-    }
-
+    /// Case- and diacritic-insensitive match on channel name and group.
     static func matches(_ channel: Channel, _ query: String) -> Bool {
         channel.name.localizedStandardContains(query) || (channel.group?.localizedStandardContains(query) ?? false)
     }

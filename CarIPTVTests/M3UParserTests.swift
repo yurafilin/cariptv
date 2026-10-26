@@ -105,6 +105,20 @@ struct BrowserAddressTests {
         #expect(BrowserModel.url(from: "youtube.com")?.absoluteString == "https://youtube.com")
     }
 
+    @Test func siteAddressesAreSitesOnly() {
+        #expect(BrowserModel.siteURL(from: " example.com ")?.absoluteString == "https://example.com")
+        #expect(BrowserModel.siteURL(from: "http://tv.example.org/live")?.absoluteString == "http://tv.example.org/live")
+        #expect(BrowserModel.siteURL(from: "funny cats") == nil)
+        #expect(BrowserModel.siteURL(from: "localhost") == nil)
+        #expect(BrowserModel.siteURL(from: "ftp://example.com") == nil)
+        #expect(BrowserModel.siteURL(from: "") == nil)
+    }
+
+    @Test func siteNameIsTheDomainWithoutWWW() {
+        #expect(BrowserModel.siteName(URL(string: "https://www.example.com/x")!) == "example.com")
+        #expect(BrowserModel.siteName(URL(string: "https://tv.example.org")!) == "tv.example.org")
+    }
+
     @Test func searchesEverythingElse() {
         let url = BrowserModel.url(from: "cat videos")
         #expect(url?.host() == "www.google.com")

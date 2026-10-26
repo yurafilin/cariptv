@@ -31,10 +31,6 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>CarIPTV listens only while you search by voice.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>CarIPTV turns what you say into text to search your channels.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>CarIPTV uses your local network to receive videos cast from other apps.</string>
 	<key>LSApplicationQueriesSchemes</key>

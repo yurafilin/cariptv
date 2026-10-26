@@ -1,57 +1,43 @@
 import SwiftUI
 
-/// Sources and their channels, recents, and search across everything.
+/// Everything to start watching from: the browser and casting, recents, favorites and sources.
+/// No title bar: the tab says where you are. Casting and the browser work without any source, so
+/// they stay on top. Channels are searched inside their source.
 struct HomeView: View {
-    @State private var query = ""
-    @State private var isVoiceSearching = false
+    enum Route: Hashable {
+        case browser
+        case castFromApp
+        case mirror
+        case favorites
+    }
+
+    @State private var path = NavigationPath()
 
     var body: some View {
         let store = LibraryStore.shared
-        NavigationStack {
-            Group {
-                if !query.isEmpty {
-                    searchResults(store.search(query))
-                } else if store.sources.isEmpty {
-                    EmptyStateView(
-                        systemImage: "tray",
-                        title: "Your library is empty",
-                        message: "Add an M3U playlist, or connect Xtream, Jellyfin, Emby or Plex to see your content here. CarIPTV doesn't include any channels.",
-                        actionTitle: "Add a Source",
-                        action: { AppRouter.shared.isAddSourcePresented = true }
-                    )
-                } else {
-                    library(store)
-                }
-            }
-            .navigationTitle("Home")
-            .searchable(text: $query, prompt: "Search channels")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        isVoiceSearching = true
-                    } label: {
-                        Label("Voice Search", systemImage: "mic")
+        NavigationStack(path: $path) {
+            library(store)
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: Route.self) { route in
+                    switch route {
+                    case .browser: BrowserView()
+                    case .castFromApp: CastFromAppView()
+                    case .mirror: CastToScreenView()
+                    case .favorites: FavoritesListView()
                     }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        AppRouter.shared.isAddSourcePresented = true
-                    } label: {
-                        Label("Add a Source", systemImage: "plus")
-                    }
-                }
-            }
-            .sheet(isPresented: $isVoiceSearching) {
-                VoiceSearchSheet { text in
-                    query = text
-                }
-            }
-            .miniPlayerInset()
+                .miniPlayerInset()
         }
     }
 
     private func library(_ store: LibraryStore) -> some View {
         List {
+            Section {
+                shortcuts
+            }
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+
             if !store.recent.isEmpty {
                 Section("Recently played") {
                     ForEach(store.recent.prefix(5)) { item in
@@ -59,31 +45,108 @@ struct HomeView: View {
                     }
                 }
             }
-            Section("Sources") {
-                ForEach(store.sources) { source in
-                    NavigationLink {
-                        if source.hasMediaLibraries {
-                            MediaSourceView(source: source)
-                        } else {
-                            SourceChannelsView(source: source)
+            if !store.favorites.isEmpty {
+                Section("Favorites") {
+                    ForEach(store.favorites.prefix(Self.favoritesShown)) { item in
+                        ChannelRow(item: item, queue: { store.favorites })
+                    }
+                    if store.favorites.count > Self.favoritesShown {
+                        NavigationLink(value: Route.favorites) {
+                            Text("All Favorites · \(store.favorites.count)")
                         }
-                    } label: {
-                        SourceRow(source: source)
                     }
                 }
+            }
+            if store.sources.isEmpty {
+                Section {
+                    addSourceCard
+                }
+            } else {
+                sources(store)
             }
         }
     }
 
-    @ViewBuilder
-    private func searchResults(_ results: [LibraryItem]) -> some View {
-        if results.isEmpty {
-            ContentUnavailableView.search(text: query)
-        } else {
-            List(results) { item in
-                ChannelRow(item: item, queue: { results })
+    private static let favoritesShown = 5
+
+    /// Ways to watch that need no source: the browser (YouTube and other sites) and casting.
+    private var shortcuts: some View {
+        HStack(spacing: 10) {
+            ShortcutTile(systemImage: "safari", title: "Browser") { path.append(Route.browser) }
+            ShortcutTile(systemImage: "arrow.up.forward.app", title: "Cast from App") { path.append(Route.castFromApp) }
+            ShortcutTile(systemImage: "rectangle.on.rectangle", title: "Mirror Screen") { path.append(Route.mirror) }
+        }
+    }
+
+    /// No source yet. The text must keep saying the app has no content of its own (App Review).
+    private var addSourceCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Add your channels", systemImage: "tray")
+                .font(.headline)
+            Text("Add an M3U playlist, or connect Xtream, Jellyfin, Emby or Plex to see your content here. CarIPTV doesn't include any channels.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button {
+                AppRouter.shared.isAddSourcePresented = true
+            } label: {
+                Text("Add a Source")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        }
+        .padding(.vertical, 8)
+    }
+
+    private func sources(_ store: LibraryStore) -> some View {
+        Section("Sources") {
+            ForEach(store.sources) { source in
+                NavigationLink {
+                    if source.hasMediaLibraries {
+                        MediaSourceView(source: source)
+                    } else {
+                        SourceChannelsView(source: source)
+                    }
+                } label: {
+                    SourceRow(source: source)
+                }
+            }
+            Button {
+                AppRouter.shared.isAddSourcePresented = true
+            } label: {
+                Label("Add a Source", systemImage: "plus")
             }
         }
+    }
+}
+
+/// A large square entry on top of Home; the whole tile is the button.
+private struct ShortcutTile: View {
+    let systemImage: String
+    let title: LocalizedStringKey
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.title2)
+                    .foregroundStyle(.tint)
+                Text(title)
+                    .font(.footnote.weight(.medium))
+                    // The button would tint the label too: only the icon carries the accent.
+                    .foregroundStyle(Color(.label))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+            }
+            .frame(maxWidth: .infinity, minHeight: 84)
+            .padding(.horizontal, 6)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+            .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        // Three buttons in one list row: without this the row would fire all of them.
+        .buttonStyle(.borderless)
     }
 }
 

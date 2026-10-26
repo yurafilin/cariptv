@@ -7,8 +7,7 @@ final class AppRouter {
 
     enum Tab: Hashable {
         case home
-        case favorites
-        case discover
+        case downloads
         case settings
     }
 

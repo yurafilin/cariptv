@@ -2,7 +2,7 @@ import CarPlay
 import CoreMedia
 import UIKit
 
-/// CarPlay scene: tabs with favorites, recent channels and the screen status.
+/// CarPlay scene: tabs with favorites, recent channels, the videos imported on the phone and the screen status.
 /// Selecting a channel starts our player; on iOS 26.4+ the system then shows its video on the car
 /// screen (`CPPlaybackConfiguration`, AirPlay from the same `AVPlayer`) while the car is parked.
 /// If CarPlay also hands the app a window of its own, mirroring is drawn there by `CarScreenViewController`.
@@ -14,6 +14,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
     private let favoritesTemplate = CPListTemplate(title: String(localized: "Favorites"), sections: [])
     private let recentTemplate = CPListTemplate(title: String(localized: "Recent"), sections: [])
+    private let videosTemplate = CPListTemplate(title: String(localized: "Videos"), sections: [])
     private let screenTemplate = CPListTemplate(title: String(localized: "Screen"), sections: [])
     private let mirroringItem = CPListItem(text: String(localized: "Screen mirroring"), detailText: nil)
     private let playingItem = CPListItem(text: String(localized: "Now playing"), detailText: nil)
@@ -72,16 +73,21 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         recentTemplate.tabTitle = String(localized: "Recent")
         recentTemplate.tabImage = UIImage(systemName: "clock")
         recentTemplate.emptyViewTitleVariants = [String(localized: "Nothing played yet")]
+        videosTemplate.tabTitle = String(localized: "Videos")
+        videosTemplate.tabImage = UIImage(systemName: "film")
+        videosTemplate.emptyViewTitleVariants = [String(localized: "No videos yet")]
+        videosTemplate.emptyViewSubtitleVariants = [String(localized: "Add videos on your iPhone in Downloads.")]
         screenTemplate.tabTitle = String(localized: "Screen")
         screenTemplate.tabImage = UIImage(systemName: "rectangle.on.rectangle")
         screenTemplate.updateSections([CPListSection(items: [playingItem, mirroringItem])])
 
-        let tabs = CPTabBarTemplate(templates: [favoritesTemplate, recentTemplate, screenTemplate])
+        let tabs = CPTabBarTemplate(templates: [favoritesTemplate, recentTemplate, videosTemplate, screenTemplate])
         interfaceController.setRootTemplate(tabs, animated: false, completion: nil)
 
         observers = [
             StateObserver { [weak self] in self?.updateList(self?.favoritesTemplate, LibraryStore.shared.favorites) },
             StateObserver { [weak self] in self?.updateList(self?.recentTemplate, LibraryStore.shared.recent) },
+            StateObserver { [weak self] in self?.updateVideos() },
             StateObserver { [weak self] in self?.updateScreenItems() },
         ]
         MirrorReceiver.shared.start()
@@ -129,6 +135,40 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             return row
         }
         template.updateSections([CPListSection(items: Array(rows))])
+    }
+
+    /// Videos imported on the phone. They play like films: the player repackages them for the car.
+    private func updateVideos() {
+        let store = LibraryStore.shared
+        let playback = PlaybackController.shared
+        let videos = store.localVideos.prefix(CPListTemplate.maximumItemCount)
+        let rows = videos.map { video -> CPListItem in
+            let url = store.url(for: video)
+            let row = CPListItem(
+                text: video.title,
+                detailText: video.addedAt.formatted(date: .abbreviated, time: .omitted),
+                image: UIImage(systemName: "film")
+            )
+            let isCurrent = playback.media?.url == url
+            let pauses = isCurrent && playback.state == .playing
+            if #available(iOS 26.4, *) {
+                row.playbackConfiguration = Self.playbackConfiguration(isCurrent: isCurrent, pauses: pauses)
+            }
+            row.isPlaying = isCurrent && playback.isActive
+            row.handler = { [weak self] _, completion in
+                if pauses {
+                    playback.pause()
+                } else if isCurrent, playback.state == .paused {
+                    playback.resume()
+                } else {
+                    playback.play(PlayableMedia(title: video.title, url: url, isLive: false))
+                }
+                self?.showNowPlaying()
+                completion()
+            }
+            return row
+        }
+        videosTemplate.updateSections([CPListSection(items: Array(rows))])
     }
 
     /// The system shows the video itself (or "Now Playing" in cars without video) after the

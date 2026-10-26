@@ -1,52 +1,13 @@
 import SwiftUI
 
-/// Favorite channels and videos imported from Files or Photos.
-struct FavoritesView: View {
-    enum Segment: Hashable {
-        case favorites
-        case local
-    }
-
-    @State private var segment: Segment = .favorites
-
+/// What plays without a network: videos imported from Files or Photos (and, later, films downloaded
+/// from the user's servers). The car shows the same list in its Videos tab.
+struct DownloadsView: View {
     var body: some View {
-        let store = LibraryStore.shared
         NavigationStack {
-            VStack(spacing: 0) {
-                Picker("Show", selection: $segment) {
-                    Text("Favorites").tag(Segment.favorites)
-                    Text("Local · \(store.localVideos.count)").tag(Segment.local)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-
-                switch segment {
-                case .favorites:
-                    favorites(store)
-                case .local:
-                    LocalVideosList()
-                }
-            }
-            .navigationTitle("Favorites")
-            .miniPlayerInset()
-        }
-    }
-
-    @ViewBuilder
-    private func favorites(_ store: LibraryStore) -> some View {
-        if store.favorites.isEmpty {
-            EmptyStateView(
-                systemImage: "heart",
-                title: "Nothing saved yet",
-                message: "Touch and hold any channel to keep it here. Favorites also appear on the car display.",
-                actionTitle: "Go to Home",
-                action: { AppRouter.shared.tab = .home }
-            )
-        } else {
-            List(store.favorites) { item in
-                ChannelRow(item: item, queue: { store.favorites })
-            }
+            LocalVideosList()
+                .navigationTitle("Downloads")
+                .miniPlayerInset()
         }
     }
 }
