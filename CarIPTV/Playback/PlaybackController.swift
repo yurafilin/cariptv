@@ -26,6 +26,7 @@ final class PlaybackController {
 
     @ObservationIgnored private var itemObservation: NSKeyValueObservation?
     @ObservationIgnored private var timeControlObservation: NSKeyValueObservation?
+    @ObservationIgnored private var externalObservation: NSKeyValueObservation?
     /// `PlayableMedia.startTime`, applied once the item can seek.
     @ObservationIgnored private var pendingStart: Double?
     /// Repackages the current file into HLS for the car display.
@@ -42,6 +43,11 @@ final class PlaybackController {
             let status = player.timeControlStatus
             Task { @MainActor in PlaybackController.shared.timeControlChanged(status) }
         }
+        externalObservation = player.observe(\.isExternalPlaybackActive, options: [.new]) { player, _ in
+            let active = player.isExternalPlaybackActive
+            Log.playback.info("car video: \(active ? "on" : "off", privacy: .public)")
+            Task { @MainActor in PlaybackController.shared.carVideoChanged(active) }
+        }
         setUpRemoteCommands()
     }
 
@@ -51,7 +57,7 @@ final class PlaybackController {
 
     /// Plays `media`; `queue` is the list it came from (channels of a group, favorites, episodes).
     func play(_ media: PlayableMedia, queue: [LibraryItem] = []) {
-        activateAudioSession()
+        activateAudioSession(mixing: media.isScreen)
         self.queue = queue.count > 1 ? queue : []
         updateStepCommands()
         self.media = media
@@ -140,6 +146,13 @@ final class PlaybackController {
 
     private func startItem(_ asset: AVURLAsset) {
         let item = AVPlayerItem(asset: asset)
+        let isScreen = media?.isScreen == true
+        if isScreen {
+            // Where to start is in the stream itself (`MirrorStream`): the car's player does not see
+            // this item's settings (a 1.5 s offset left the car 5–6 s behind, as the default did).
+            item.automaticallyPreservesTimeOffsetFromLive = true
+            watchDelay(of: item)
+        }
         itemObservation = item.observe(\.status, options: [.new]) { item, _ in
             let status = item.status
             if let error = item.error {
@@ -175,7 +188,26 @@ final class PlaybackController {
 
     func resume() {
         guard media != nil else { return }
+        if media?.isScreen == true {
+            // A paused screen is out of date: go on from what the iPhone shows now.
+            jumpToLive()
+        }
         player.play()
+    }
+
+    /// The car took the video back (after the car app was left or the picture paused): the
+    /// mirrored screen goes on from now.
+    private func carVideoChanged(_ active: Bool) {
+        guard active, media?.isScreen == true, player.timeControlStatus == .paused else { return }
+        Log.playback.info("screen: car video back, playing from now")
+        resume()
+    }
+
+    /// Seeks the mirrored screen to where its stream starts behind the live edge.
+    private func jumpToLive() {
+        guard let item = player.currentItem, let live = item.seekableTimeRanges.last?.timeRangeValue.end, live.isNumeric else { return }
+        let offset = CMTime(seconds: MirrorStream.startBehindLive, preferredTimescale: 600)
+        player.seek(to: CMTimeSubtract(live, offset))
     }
 
     func pause() {
@@ -254,6 +286,8 @@ final class PlaybackController {
         // While a file is being prepared for the car there is no item yet: nothing has paused.
         guard media != nil, player.currentItem != nil else { return }
         if case .failed = state { return }
+        let waiting = player.reasonForWaitingToPlay?.rawValue ?? "-"
+        Log.playback.info("player: \(Self.name(of: status), privacy: .public), waiting for \(waiting, privacy: .public), in car \(self.player.isExternalPlaybackActive)")
         switch status {
         case .playing: state = .playing
         case .paused: state = .paused
@@ -263,12 +297,43 @@ final class PlaybackController {
         updateNowPlaying()
     }
 
+    private static func name(of status: AVPlayer.TimeControlStatus) -> String {
+        switch status {
+        case .playing: "playing"
+        case .paused: "paused"
+        case .waitingToPlayAtSpecifiedRate: "waiting"
+        @unknown default: "unknown"
+        }
+    }
+
     // MARK: - System integration
 
-    private func activateAudioSession() {
+    /// A playing screen this far behind the iPhone has stalled: it jumps back to the live edge.
+    private static let screenMaxDelay = 8.0
+
+    /// How far the mirrored screen's picture trails the iPhone screen in our player, every few
+    /// seconds: the stream dates its segments. The car adds its own buffering on top.
+    private func watchDelay(of item: AVPlayerItem) {
+        Task {
+            while player.currentItem === item {
+                try? await Task.sleep(for: .seconds(3))
+                guard player.currentItem === item, let date = item.currentDate() else { continue }
+                let delay = Date().timeIntervalSince(date)
+                Log.playback.info("screen: picture \(String(format: "%.1f", delay)) s behind, in car \(self.player.isExternalPlaybackActive)")
+                if delay > Self.screenMaxDelay, player.timeControlStatus != .paused {
+                    Log.playback.info("screen: too far behind, jumping to the live edge")
+                    jumpToLive()
+                }
+            }
+        }
+    }
+
+    /// `mixing`: the mirrored screen has no sound of its own; the source app keeps playing its sound
+    /// through the car instead of being interrupted by ours.
+    private func activateAudioSession(mixing: Bool) {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setCategory(.playback, mode: .moviePlayback, options: mixing ? [.mixWithOthers] : [])
             try session.setActive(true)
         } catch {
             Log.playback.error("audio session: \(error.localizedDescription)")

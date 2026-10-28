@@ -5,7 +5,8 @@ import UIKit
 /// CarPlay scene: tabs with favorites, recent channels, the videos imported on the phone and the screen status.
 /// Selecting a channel starts our player; on iOS 26.4+ the system then shows its video on the car
 /// screen (`CPPlaybackConfiguration`, AirPlay from the same `AVPlayer`) while the car is parked.
-/// If CarPlay also hands the app a window of its own, mirroring is drawn there by `CarScreenViewController`.
+/// The mirrored iPhone screen goes the same way, as a live stream (`ScreenPlayback`). If CarPlay also
+/// hands the app a window of its own, `CarScreenViewController` draws the mirror there directly.
 final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     private var interfaceController: CPInterfaceController?
     private var window: CPWindow?
@@ -92,6 +93,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         ]
         MirrorReceiver.shared.start()
         CastReceiver.shared.setActive(true, for: .carPlay)
+        ScreenPlayback.carConnected()
     }
 
     private func disconnect() {
@@ -210,6 +212,20 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             detail = String(localized: "Start mirroring on your iPhone")
         }
         mirroringItem.setDetailText(detail)
+
+        // The mirrored screen is a live stream in our player: selecting the row shows it like a channel.
+        let canPlay = car.mirroringAvailable && mirror.state == .streaming
+        if #available(iOS 26.4, *) {
+            mirroringItem.playbackConfiguration = canPlay
+                ? CPPlaybackConfiguration(preferredPresentation: .video, playbackAction: .play, elapsedTime: .zero, duration: .zero)
+                : nil
+        }
+        mirroringItem.isPlaying = ScreenPlayback.isPlaying
+        mirroringItem.handler = canPlay ? { [weak self] _, completion in
+            ScreenPlayback.play()
+            self?.showNowPlaying()
+            completion()
+        } : nil
     }
 
     /// Before iOS 26.4 the rows carry no playback configuration, so "Now Playing" is opened by hand.

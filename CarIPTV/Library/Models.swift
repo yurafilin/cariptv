@@ -102,9 +102,11 @@ struct PlayableMedia: Hashable, Sendable {
     var startTime: Double?
     /// A web video is requested the way the page requested it.
     var web: WebRequest?
+    /// The mirrored iPhone screen: plays close to live, alongside the source app's own sound.
+    var isScreen: Bool
 
     init(title: String, subtitle: String? = nil, url: URL, artwork: URL? = nil, isLive: Bool, libraryItem: LibraryItem? = nil,
-         startTime: Double? = nil, web: WebRequest? = nil) {
+         startTime: Double? = nil, web: WebRequest? = nil, isScreen: Bool = false) {
         self.title = title
         self.subtitle = subtitle
         self.url = url
@@ -113,6 +115,7 @@ struct PlayableMedia: Hashable, Sendable {
         self.libraryItem = libraryItem
         self.startTime = startTime
         self.web = web
+        self.isScreen = isScreen
     }
 
     init(_ item: MediaItem, sourceID: UUID, group: String?) {

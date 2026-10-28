@@ -5,8 +5,10 @@ import SwiftUI
 struct DownloadsView: View {
     var body: some View {
         NavigationStack {
+            // No title bar, as on Home: the tab says where you are.
             LocalVideosList()
                 .navigationTitle("Downloads")
+                .toolbar(.hidden, for: .navigationBar)
                 .miniPlayerInset()
         }
     }

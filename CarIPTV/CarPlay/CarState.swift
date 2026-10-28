@@ -2,8 +2,8 @@ import CarPlay
 import Observation
 
 /// What the connected car allows. Video is shown only when every check passes.
-/// Channels and films reach the car through the system's video presentation (iOS 26.4+);
-/// screen mirroring additionally needs a window of our own on the car screen.
+/// Channels, films and the mirrored screen reach the car through the system's video presentation
+/// of our player (iOS 26.4+).
 @MainActor @Observable
 final class CarState {
     static let shared = CarState()
@@ -37,16 +37,14 @@ final class CarState {
         return .allowed
     }
 
-    /// Mirroring draws into a CarPlay window of our own. CarPlay documents that window only for
-    /// navigation apps, so a video app may never get one; then mirroring stays on the phone.
+    /// The mirrored screen plays as a live stream in our player (`ScreenPlayback`), like a channel:
+    /// a video app gets no CarPlay window to draw it in (`window=false`, 2026-10-27).
     var mirroringAvailable: Bool {
-        hasWindow && videoAvailability == .allowed
+        videoAvailability == .allowed
     }
 
     var mirroringMessage: String {
-        if mirroringAvailable { return String(localized: "Available") }
-        if isConnected, !hasWindow { return String(localized: "Not available in this car") }
-        return videoAvailability.message
+        mirroringAvailable ? String(localized: "Available") : videoAvailability.message
     }
 
     func connect(hasWindow: Bool, supportsVideoPlayback: Bool?, limitedInterfaces: CPLimitableUserInterface) {

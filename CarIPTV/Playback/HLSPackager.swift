@@ -144,6 +144,7 @@ final class HLSPackager: @unchecked Sendable {
         file?.cancel()
         tasks.forEach { $0.cancel() }
         finish(with: CancellationError())
+        LocalHLSServer.shared.remove(self)
         // The writers stop at their next sample; give them a moment before the folder goes.
         let directory = directory
         DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
@@ -599,13 +600,24 @@ private final class Rendition: NSObject, AVAssetWriterDelegate, @unchecked Senda
 }
 
 
-/// Serves packaged HLS to our own player on `127.0.0.1`: `/hls/<packager id>/index.m3u8` and the
-/// video and audio playlists and segments it names.
+/// What `LocalHLSServer` hands to our player: a repackaged file or the mirrored screen.
+protocol HLSSource: AnyObject, Sendable {
+    var id: UUID { get }
+    /// `index.m3u8` and the playlists it names; `nil` for an unknown name.
+    func playlist(named name: String) -> String?
+    /// An init or media segment, once written.
+    func file(named name: String) -> Data?
+}
+
+extension HLSPackager: HLSSource {}
+
+/// Serves HLS to our own player on `127.0.0.1`: `/hls/<source id>/index.m3u8` and the playlists
+/// and segments it names. A source stays until it is cancelled or ends.
 final class LocalHLSServer: @unchecked Sendable {
     static let shared = LocalHLSServer()
 
     private let lock = NSLock()
-    private var packagers: [UUID: HLSPackager] = [:]
+    private var sources: [UUID: any HLSSource] = [:]
     private var port: UInt16?
     private var waiters: [CheckedContinuation<UInt16, Error>] = []
     private lazy var server: HTTPServer = {
@@ -617,15 +629,15 @@ final class LocalHLSServer: @unchecked Sendable {
         return server
     }()
 
-    /// The playlist address for `packager`; starts the server on first use.
-    func url(for packager: HLSPackager) async throws -> URL {
-        lock.withLock { packagers = [packager.id: packager] }
+    /// The playlist address for `source`; starts the server on first use.
+    func url(for source: any HLSSource) async throws -> URL {
+        lock.withLock { sources[source.id] = source }
         let port = try await serverPort()
-        return URL(string: "http://127.0.0.1:\(port)/hls/\(packager.id.uuidString)/index.m3u8")!
+        return URL(string: "http://127.0.0.1:\(port)/hls/\(source.id.uuidString)/index.m3u8")!
     }
 
-    func remove(_ packager: HLSPackager) {
-        lock.withLock { packagers[packager.id] = nil }
+    func remove(_ source: any HLSSource) {
+        lock.withLock { sources[source.id] = nil }
     }
 
     private func serverPort() async throws -> UInt16 {
@@ -662,17 +674,17 @@ final class LocalHLSServer: @unchecked Sendable {
     private func response(to request: HTTPServer.Request) -> HTTPServer.Response {
         let parts = request.path.split(separator: "/")
         guard parts.count == 3, parts[0] == "hls", let id = UUID(uuidString: String(parts[1])),
-              let packager = lock.withLock({ packagers[id] }) else { return .empty(404) }
+              let source = lock.withLock({ sources[id] }) else { return .empty(404) }
         let name = String(parts[2])
         let response: HTTPServer.Response
         if name.hasSuffix(".m3u8") {
-            if let playlist = packager.playlist(named: name) {
+            if let playlist = source.playlist(named: name) {
                 response = HTTPServer.Response(status: 200, headers: ["Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-cache"],
                                                body: Data(playlist.utf8))
             } else {
                 response = .empty(404)
             }
-        } else if let data = packager.file(named: name) {
+        } else if let data = source.file(named: name) {
             let type = name.hasSuffix(".mp4") ? "video/mp4" : "video/iso.segment"
             response = HTTPServer.Response(status: 200, headers: ["Content-Type": type], body: data)
         } else {

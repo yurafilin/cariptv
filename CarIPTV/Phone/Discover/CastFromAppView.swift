@@ -109,8 +109,9 @@ struct CastingApp: Identifiable {
     var id: String { scheme }
     var url: URL { URL(string: "\(scheme)://")! }
 
+    /// Only apps with a DLNA cast button. Not TikTok outside China: it has no such button
+    /// (checked 2026-10-27), only Douyin does.
     static let known: [CastingApp] = [
-        CastingApp(name: "TikTok", scheme: "snssdk1233"),
         CastingApp(name: "Douyin", scheme: "snssdk1128"),
         CastingApp(name: "Bilibili", scheme: "bilibili"),
         CastingApp(name: "iQIYI", scheme: "iqiyi"),

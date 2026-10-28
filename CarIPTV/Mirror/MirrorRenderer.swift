@@ -40,6 +40,11 @@ final class MirrorRenderer {
         renderers.forEach { $0.flush(removingDisplayedImage: true, completionHandler: nil) }
     }
 
+    /// The stream's current format, from the last parameter sets.
+    var format: CMVideoFormatDescription? {
+        lock.withLock { formatDescription }
+    }
+
     /// Returns the coded size, or `nil` when the parameter sets are unusable.
     func setParameterSets(_ sets: [Data]) -> CMVideoDimensions? {
         guard let format = Self.makeFormatDescription(sets) else { return nil }
@@ -83,7 +88,7 @@ final class MirrorRenderer {
 
     // MARK: - CoreMedia
 
-    private static func makeFormatDescription(_ sets: [Data]) -> CMVideoFormatDescription? {
+    static func makeFormatDescription(_ sets: [Data]) -> CMVideoFormatDescription? {
         guard !sets.isEmpty, sets.allSatisfy({ !$0.isEmpty }) else { return nil }
         let buffers = sets.map { set -> UnsafeMutableBufferPointer<UInt8> in
             let buffer = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: set.count)
@@ -106,7 +111,10 @@ final class MirrorRenderer {
         return status == noErr ? format : nil
     }
 
-    private static func makeSampleBuffer(_ frame: MirrorProtocol.Frame, format: CMVideoFormatDescription) -> CMSampleBuffer? {
+    /// `displayImmediately`: for the screens, which show each frame as soon as it is decoded;
+    /// the HLS writer keeps the timestamps.
+    static func makeSampleBuffer(_ frame: MirrorProtocol.Frame, format: CMVideoFormatDescription,
+                                 displayImmediately: Bool = true) -> CMSampleBuffer? {
         let length = frame.data.count
         var blockBuffer: CMBlockBuffer?
         guard CMBlockBufferCreateWithMemoryBlock(
@@ -145,15 +153,17 @@ final class MirrorRenderer {
             sampleBufferOut: &sampleBuffer
         ) == noErr, let sampleBuffer else { return nil }
 
-        // Live stream: show each frame as soon as it is decoded, ignore timestamps.
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true),
            CFArrayGetCount(attachments) > 0 {
             let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
-            CFDictionarySetValue(
-                dictionary,
-                Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
-                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
-            )
+            if displayImmediately {
+                // Live stream: show each frame as soon as it is decoded, ignore timestamps.
+                CFDictionarySetValue(
+                    dictionary,
+                    Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                    Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+                )
+            }
             if !frame.isKeyframe {
                 CFDictionarySetValue(
                     dictionary,

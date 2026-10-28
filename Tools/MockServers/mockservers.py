@@ -87,8 +87,51 @@ def playlist():
         # (make them with packagehls.swift and the commands in CLAUDE.md).
         '#EXTINF:-1 group-title="Controls",Apple HLS over HTTP', BASE + "/media/applehls/prog_index.m3u8",
         '#EXTINF:-1 group-title="Controls",Packaged HLS over HTTP', BASE + "/media/packaged/index.m3u8",
+        # Apple's stream as a live channel (a sliding window, see live_loop): does the car take live HLS at all?
+        '#EXTINF:-1 group-title="Controls",Live TS over HTTP', BASE + "/livesim/applehls.m3u8",
         "",
     ])
+
+
+LIVE_SOURCES = {"applehls": "applehls/prog_index.m3u8"}
+
+
+def live_loop(name, window=6):
+    """A live playlist like an IPTV channel's: loops a local VOD media playlist by the wall clock,
+    keeps the last `window` segments, marks a discontinuity at each wrap."""
+    folder = "/media/" + os.path.dirname(name) + "/"
+    maps, segments, tags = [], [], []
+    for line in open(os.path.join(MEDIA, name)).read().splitlines():
+        if line.startswith("#EXT-X-MAP"):
+            maps.append(re.sub(r'URI="([^"]+)"', lambda m: 'URI="%s%s"' % (folder, m.group(1)), line))
+        elif line.startswith("#EXTINF") or line.startswith("#EXT-X-BYTERANGE"):
+            tags.append(line)
+        elif line and not line.startswith("#"):
+            duration = float(tags[0].split(":")[1].split(",")[0])
+            segments.append((duration, tags, folder + line))
+            tags = []
+    count, total = len(segments), sum(d for d, _, _ in segments)
+    loops, rest = divmod(time.time(), total)
+    done = 0
+    for duration, _, _ in segments:
+        if rest < duration:
+            break
+        rest -= duration
+        done += 1
+    last = int(loops) * count + done - 1
+    first = max(last - window + 1, 0)
+    cycle, index = divmod(first, count)
+    lines = ["#EXTM3U", "#EXT-X-VERSION:7",
+             "#EXT-X-TARGETDURATION:%d" % int(max(d for d, _, _ in segments) + 0.999),
+             "#EXT-X-MEDIA-SEQUENCE:%d" % first,
+             "#EXT-X-DISCONTINUITY-SEQUENCE:%d" % max(cycle if index > 0 else cycle - 1, 0)] + maps
+    for number in range(first, last + 1):
+        cycle, index = divmod(number, count)
+        if index == 0 and number > first:
+            lines.append("#EXT-X-DISCONTINUITY")
+        _, tags, uri = segments[index]
+        lines += tags + [uri]
+    return "\n".join(lines) + "\n"
 
 
 def guide():
@@ -193,6 +236,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_bytes(playlist().encode(), "audio/x-mpegurl")
         if path == "/epg.xml.gz":
             return self.send_bytes(guide(), "application/gzip")
+        m = re.match(r"^/livesim/(\w+)\.m3u8$", path)
+        if m and m.group(1) in LIVE_SOURCES:
+            return self.send_bytes(live_loop(LIVE_SOURCES[m.group(1)]).encode(), "application/vnd.apple.mpegurl")
         if re.match(r"^/live/1/2/", path):
             return self.redirect(VIDEO["live"])
         if re.match(r"^/(movie|series)/1/2/", path) or re.match(r"^/Videos/[^/]+/master\.m3u8$", path):

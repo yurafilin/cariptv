@@ -3,8 +3,9 @@ import Foundation
 import ImageIO
 import Network
 
-/// App side of the loopback link: accepts the ScreenRelay extension and feeds `renderer`.
-/// All networking runs on `queue`; status goes to `MirrorStatus` on the main actor.
+/// App side of the loopback link: accepts the ScreenRelay extension, feeds `renderer` (the phone's
+/// preview, a CarPlay window if the car gives one) and `MirrorStream` (live HLS that our player
+/// takes to the car). All networking runs on `queue`; status goes to `MirrorStatus` on the main actor.
 final class MirrorReceiver {
     static let shared = MirrorReceiver()
 
@@ -18,6 +19,7 @@ final class MirrorReceiver {
     private var framesThisSecond = 0
     private var lastOrientation: UInt8 = 0
     private var retryScheduled = false
+    private var stream: MirrorStream?
 
     private init() {
         renderer.onNeedsKeyframe = { [weak self] in
@@ -154,6 +156,7 @@ final class MirrorReceiver {
         case .hello:
             let version = payload.first ?? 0
             Log.mirror.info("receiver: hello v\(version)")
+            startStream()
             startFPSTimer()
             MirrorStatus.publish { $0.set(state: .streaming) }
         case .parameterSets:
@@ -167,6 +170,9 @@ final class MirrorReceiver {
         case .frame:
             guard let frame = MirrorProtocol.parseFrame(payload) else { return }
             renderer.render(frame)
+            if let format = renderer.format {
+                stream?.append(frame, format: format)
+            }
             framesThisSecond += 1
             if frame.orientation != lastOrientation {
                 lastOrientation = frame.orientation
@@ -185,12 +191,35 @@ final class MirrorReceiver {
         guard endedConnection === connection else { return }
         connection = nil
         stopFPSTimer()
+        endStream()
         renderer.reset()
         let state: MirrorStatus.State = listener == nil ? .stopped : .listening
         MirrorStatus.publish {
             $0.set(state: state)
             $0.set(framesPerSecond: 0)
         }
+    }
+
+    // MARK: - Stream for the car
+
+    private func startStream() {
+        endStream()
+        let stream = MirrorStream()
+        stream.onNeedsKeyframe = { [weak self] in
+            self?.requestKeyframe()
+        }
+        stream.onReady = { [weak stream] in
+            guard let stream else { return }
+            Task { @MainActor in ScreenPlayback.ready(stream) }
+        }
+        self.stream = stream
+    }
+
+    private func endStream() {
+        guard let stream else { return }
+        stream.finish()
+        self.stream = nil
+        Task { @MainActor in ScreenPlayback.ended(stream) }
     }
 
     // MARK: - FPS
