@@ -92,7 +92,6 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             StateObserver { [weak self] in self?.updateScreenItems() },
         ]
         MirrorReceiver.shared.start()
-        CastReceiver.shared.setActive(true, for: .carPlay)
         ScreenPlayback.carConnected()
     }
 
@@ -105,7 +104,6 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         interfaceController = nil
         sessionConfiguration = nil
         CarState.shared.disconnect()
-        CastReceiver.shared.setActive(false, for: .carPlay)
     }
 
     // MARK: - Content

@@ -1,12 +1,11 @@
 import SwiftUI
 
-/// Everything to start watching from: the browser and casting, recents, favorites and sources.
-/// No title bar: the tab says where you are. Casting and the browser work without any source, so
+/// Everything to start watching from: the browser and screen mirroring, recents, favorites and sources.
+/// No title bar: the tab says where you are. The browser and mirroring work without any source, so
 /// they stay on top. Channels are searched inside their source.
 struct HomeView: View {
     enum Route: Hashable {
         case browser
-        case castFromApp
         case mirror
         case favorites
     }
@@ -21,7 +20,6 @@ struct HomeView: View {
                 .navigationDestination(for: Route.self) { route in
                     switch route {
                     case .browser: BrowserView()
-                    case .castFromApp: CastFromAppView()
                     case .mirror: CastToScreenView()
                     case .favorites: FavoritesListView()
                     }
@@ -69,11 +67,10 @@ struct HomeView: View {
 
     private static let favoritesShown = 5
 
-    /// Ways to watch that need no source: the browser (YouTube and other sites) and casting.
+    /// Ways to watch that need no source: the browser (YouTube and other sites) and the mirrored screen.
     private var shortcuts: some View {
         HStack(spacing: 10) {
             ShortcutTile(systemImage: "safari", title: "Browser") { path.append(Route.browser) }
-            ShortcutTile(systemImage: "arrow.up.forward.app", title: "Cast from App") { path.append(Route.castFromApp) }
             ShortcutTile(systemImage: "rectangle.on.rectangle", title: "Mirror Screen") { path.append(Route.mirror) }
         }
     }

@@ -165,11 +165,7 @@ struct HelpView: View {
         ),
         Entry(
             question: "How does screen mirroring work?",
-            answer: "Open Discover → Cast to Screen, tap Start Screen Mirroring, then open any app. Apps with protected video, such as paid streaming services, show a black screen."
-        ),
-        Entry(
-            question: "How do I cast from another app?",
-            answer: "Put your iPhone on Wi-Fi and open Discover → Cast from an App. In the other app tap its Cast or TV button and choose CarIPTV."
+            answer: "Open Home → Mirror Screen, tap Start Screen Mirroring, then open any app. The picture runs a few seconds behind the sound, so for videos from websites use Watch in Car in the browser. Apps with protected video, such as paid streaming services, show a black screen."
         ),
     ]
 

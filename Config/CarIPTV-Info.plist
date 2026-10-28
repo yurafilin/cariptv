@@ -32,16 +32,6 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>CarIPTV uses your local network to receive videos cast from other apps.</string>
-	<key>LSApplicationQueriesSchemes</key>
-	<array>
-		<string>snssdk1128</string>
-		<string>bilibili</string>
-		<string>iqiyi</string>
-		<string>youku</string>
-		<string>tenvideo</string>
-		<string>imgotv</string>
-		<string>kwai</string>
-	</array>
+	<string>CarIPTV uses your local network to reach media servers and playlists on it.</string>
 </dict>
 </plist>

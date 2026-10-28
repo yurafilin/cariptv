@@ -5,5 +5,4 @@ enum Log {
     static let mirror = Logger(subsystem: "weappico.cariptv", category: "mirror")
     static let relay = Logger(subsystem: "weappico.cariptv", category: "relay")
     static let playback = Logger(subsystem: "weappico.cariptv", category: "playback")
-    static let cast = Logger(subsystem: "weappico.cariptv", category: "cast")
 }

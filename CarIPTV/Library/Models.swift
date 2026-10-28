@@ -88,8 +88,8 @@ struct LocalVideo: Codable, Hashable, Identifiable, Sendable {
     var addedAt: Date
 }
 
-/// Anything the player can play: a channel, a local file, a stream cast from another app,
-/// a video taken from a web page.
+/// Anything the player can play: a channel, a local file, a video taken from a web page,
+/// the mirrored screen.
 struct PlayableMedia: Hashable, Sendable {
     var title: String
     var subtitle: String?

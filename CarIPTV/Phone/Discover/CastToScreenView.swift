@@ -49,7 +49,7 @@ struct CastToScreenView: View {
                         .accessibilityHidden(true)
                 }
             } footer: {
-                Text("Everything on your iPhone screen appears on the car display, a few seconds behind the sound. To watch videos, use Watch in Car in the browser or cast from the app instead. Video shows only while the car is parked. Apps with protected video show a black screen.")
+                Text("Everything on your iPhone screen appears on the car display, a few seconds behind the sound. To watch videos from websites, use Watch in Car in the browser instead. Video shows only while the car is parked. Apps with protected video show a black screen.")
             }
 
             #if DEBUG

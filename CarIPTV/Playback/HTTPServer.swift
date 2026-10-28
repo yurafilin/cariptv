@@ -1,8 +1,8 @@
 import Foundation
 import Network
 
-/// Minimal HTTP/1.1 server for the UPnP renderer and the local HLS packager: one request per
-/// connection, `Connection: close`.
+/// Minimal HTTP/1.1 server on `127.0.0.1` for `LocalHLSServer`: one request per connection,
+/// `Connection: close`. A handler may answer later.
 final class HTTPServer {
     struct Request {
         var method: String
@@ -19,10 +19,6 @@ final class HTTPServer {
         var headers: [String: String] = [:]
         var body = Data()
 
-        static func xml(_ text: String, status: Int = 200) -> Response {
-            Response(status: status, headers: ["Content-Type": "text/xml; charset=\"utf-8\""], body: Data(text.utf8))
-        }
-
         static func empty(_ status: Int, headers: [String: String] = [:]) -> Response {
             Response(status: status, headers: headers)
         }
@@ -32,7 +28,7 @@ final class HTTPServer {
             var headers = headers
             headers["Content-Length"] = String(body.count)
             headers["Connection"] = "close"
-            headers["Server"] = "iOS UPnP/1.0 CarIPTV/1.0"
+            headers["Server"] = "CarIPTV/1.0"
             for (name, value) in headers.sorted(by: { $0.key < $1.key }) {
                 head += "\(name): \(value)\r\n"
             }
@@ -60,14 +56,11 @@ final class HTTPServer {
     var onFailure: ((String) -> Void)?
 
     private static let maxRequestSize = 1 << 20
-    private let queue = DispatchQueue(label: "weappico.cariptv.cast.http")
+    private let queue = DispatchQueue(label: "weappico.cariptv.http")
     private let handler: Handler
-    private let loopbackOnly: Bool
     private var listener: NWListener?
 
-    /// `loopbackOnly`: reachable only from this phone (the HLS packager); otherwise from the local network (UPnP).
-    init(loopbackOnly: Bool = false, handler: @escaping Handler) {
-        self.loopbackOnly = loopbackOnly
+    init(handler: @escaping Handler) {
         self.handler = handler
     }
 
@@ -75,11 +68,10 @@ final class HTTPServer {
         queue.async { [self] in
             guard listener == nil else { return }
             do {
+                // Reachable only from this phone. Like MirrorReceiver: `requiredInterfaceType = .loopback`
+                // drops connections in the Simulator.
                 let parameters = NWParameters.tcp
-                if loopbackOnly {
-                    // Like MirrorReceiver: `requiredInterfaceType = .loopback` drops connections in the Simulator.
-                    parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
-                }
+                parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
                 let listener = try NWListener(using: parameters)
                 listener.newConnectionHandler = { [weak self] connection in
                     self?.serve(connection)
@@ -159,7 +151,7 @@ final class HTTPServer {
         guard data.count - (bodyStart - data.startIndex) >= length else { return nil }
         let body = data.subdata(in: bodyStart..<bodyStart + length)
 
-        // Some control points send an absolute URL as the request target.
+        // An absolute URL as the request target is allowed too.
         var target = String(requestLine[1])
         if let url = URL(string: target), url.scheme != nil {
             target = url.path

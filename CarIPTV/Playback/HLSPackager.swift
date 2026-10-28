@@ -621,7 +621,7 @@ final class LocalHLSServer: @unchecked Sendable {
     private var port: UInt16?
     private var waiters: [CheckedContinuation<UInt16, Error>] = []
     private lazy var server: HTTPServer = {
-        let server = HTTPServer(loopbackOnly: true) { [weak self] request, respond in
+        let server = HTTPServer { [weak self] request, respond in
             respond(self?.response(to: request) ?? .empty(404))
         }
         server.onReady = { [weak self] port in self?.ready(port) }

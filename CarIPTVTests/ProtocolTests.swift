@@ -46,59 +46,14 @@ struct MirrorProtocolTests {
     }
 }
 
-struct UPnPTests {
-    @Test func readsActionFromSOAPActionHeader() {
-        #expect(UPnP.actionName(fromSOAPAction: "\"urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI\"") == "SetAVTransportURI")
-        #expect(UPnP.actionName(fromSOAPAction: nil) == nil)
-    }
-
-    @Test func parsesSOAPArgumentsAndDIDLTitle() throws {
-        let metadata = UPnP.escape("""
-        <DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/"><item><dc:title>Road trip</dc:title></item></DIDL-Lite>
-        """)
-        let body = """
-        <?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>\
-        <u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">\
-        <InstanceID>0</InstanceID><CurrentURI>http://192.168.1.5/video.mp4?a=1&amp;b=2</CurrentURI>\
-        <CurrentURIMetaData>\(metadata)</CurrentURIMetaData></u:SetAVTransportURI></s:Body></s:Envelope>
-        """
-        let arguments = UPnP.arguments(Data(body.utf8))
-        #expect(arguments["InstanceID"] == "0")
-        #expect(arguments["CurrentURI"] == "http://192.168.1.5/video.mp4?a=1&b=2")
-        let title = try #require(arguments["CurrentURIMetaData"].flatMap(UPnP.title(fromDIDL:)))
-        #expect(title == "Road trip")
-    }
-
-    @Test func convertsTimes() {
-        #expect(UPnP.seconds(fromTime: "01:02:03") == 3723)
-        #expect(UPnP.seconds(fromTime: "0:00:05.500") == 5.5)
-        #expect(UPnP.seconds(fromTime: "garbage") == nil)
-        #expect(UPnP.time(fromSeconds: 3723) == "01:02:03")
-        #expect(UPnP.time(fromSeconds: nil) == "00:00:00")
-    }
-
-    @Test func serviceDescriptionsAreWellFormedXML() {
-        for service in UPnP.Service.allCases {
-            let parser = XMLParser(data: Data(UPnP.serviceDescription(service).utf8))
-            #expect(parser.parse(), "\(service.rawValue) SCPD")
-        }
-        let device = XMLParser(data: Data(UPnP.deviceDescription(friendlyName: "Car & IPTV", udn: "uuid:1").utf8))
-        #expect(device.parse())
-    }
-
+struct HTTPServerTests {
     @Test func parsesHTTPRequestOnlyWhenBodyIsComplete() throws {
-        let head = "POST /AVTransport/control HTTP/1.1\r\nSOAPACTION: \"x#Play\"\r\nContent-Length: 4\r\n\r\n"
+        let head = "POST /hls/1/index.m3u8?_HLS_msn=3 HTTP/1.1\r\nX-Test: \"a\"\r\nContent-Length: 4\r\n\r\n"
         #expect(HTTPServer.parse(Data((head + "ab").utf8)) == nil)
         let request = try #require(HTTPServer.parse(Data((head + "abcd").utf8)))
         #expect(request.method == "POST")
-        #expect(request.path == "/AVTransport/control")
-        #expect(request.headers["soapaction"] == "\"x#Play\"")
+        #expect(request.path == "/hls/1/index.m3u8")
+        #expect(request.headers["x-test"] == "\"a\"")
         #expect(request.body == Data("abcd".utf8))
-    }
-
-    @Test func ssdpHeadersAreCaseInsensitiveAndUnquoted() {
-        let headers = SSDPResponder.headers("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMan: \"ssdp:discover\"\r\nST: ssdp:all\r\n\r\n")
-        #expect(headers["man"] == "ssdp:discover")
-        #expect(headers["st"] == "ssdp:all")
     }
 }
