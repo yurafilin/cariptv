@@ -359,7 +359,7 @@ struct GroupChips: View {
                 .lineLimit(1)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .foregroundStyle(isSelected ? Color.black : Color.primary)
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
                 .background(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary), in: Capsule())
         }
         .buttonStyle(.plain)

@@ -2,7 +2,7 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// "Choose Files" and "From Photos" rows: copy videos into the app.
+/// Import tiles for copying videos from Files or Photos into the app.
 struct LocalVideoImportRows: View {
     @State private var isImportingFiles = false
     @State private var photoItem: PhotosPickerItem?
@@ -10,45 +10,65 @@ struct LocalVideoImportRows: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        Button {
-            isImportingFiles = true
-        } label: {
-            Label("Choose Files", systemImage: "folder")
-        }
-        .fileImporter(isPresented: $isImportingFiles, allowedContentTypes: [.movie, .video], allowsMultipleSelection: true) { result in
-            switch result {
-            case .success(let urls):
-                do {
-                    for url in urls {
-                        try LibraryStore.shared.importVideo(from: url)
+        HStack(spacing: 10) {
+            Button {
+                isImportingFiles = true
+            } label: {
+                importTile("Choose Files", systemImage: "folder")
+            }
+            .fileImporter(isPresented: $isImportingFiles, allowedContentTypes: [.movie, .video], allowsMultipleSelection: true) { result in
+                switch result {
+                case .success(let urls):
+                    do {
+                        for url in urls {
+                            try LibraryStore.shared.importVideo(from: url)
+                        }
+                    } catch {
+                        errorMessage = error.localizedDescription
                     }
-                } catch {
+                case .failure(let error):
                     errorMessage = error.localizedDescription
                 }
-            case .failure(let error):
-                errorMessage = error.localizedDescription
             }
-        }
 
-        PhotosPicker(selection: $photoItem, matching: .videos, photoLibrary: .shared()) {
-            HStack {
-                Label("From Photos", systemImage: "photo.on.rectangle")
-                if isWorking {
-                    Spacer()
-                    ProgressView()
-                }
+            PhotosPicker(selection: $photoItem, matching: .videos, photoLibrary: .shared()) {
+                importTile("From Photos", systemImage: "photo.on.rectangle")
+                    .overlay(alignment: .topTrailing) {
+                        if isWorking {
+                            ProgressView().padding(8)
+                        }
+                    }
+            }
+            .disabled(isWorking)
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                importFromPhotos(item)
             }
         }
-        .disabled(isWorking)
-        .onChange(of: photoItem) { _, item in
-            guard let item else { return }
-            importFromPhotos(item)
-        }
+        .buttonStyle(.borderless)
         .alert("Couldn't add the video", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "")
         }
+    }
+
+    private func importTile(_ title: LocalizedStringKey, systemImage: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.title2)
+                .foregroundStyle(.tint)
+            Text(title)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(Color(.label))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+        }
+        .frame(maxWidth: .infinity, minHeight: 84)
+        .padding(.horizontal, 6)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+        .contentShape(RoundedRectangle(cornerRadius: 16))
     }
 
     private func importFromPhotos(_ item: PhotosPickerItem) {

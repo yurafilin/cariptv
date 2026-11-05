@@ -21,6 +21,8 @@ struct LocalVideosList: View {
         List {
             Section {
                 LocalVideoImportRows()
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
             } footer: {
                 if store.localVideos.isEmpty {
                     Text("Videos you add are copied into CarIPTV and play on the car display like channels.")

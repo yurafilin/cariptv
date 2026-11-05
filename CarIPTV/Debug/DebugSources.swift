@@ -9,8 +9,25 @@ import Foundation
 enum DebugSources {
     @MainActor
     static func addIfRequested() {
-        guard let base = UserDefaults.standard.string(forKey: "CarIPTVDebugSources") else { return }
         let store = LibraryStore.shared
+        if ProcessInfo.processInfo.arguments.contains("-CarIPTVClearDebugSources") {
+            for source in store.sources {
+                let isMock: Bool
+                switch source.kind {
+                case .m3uURL(let url): isMock = url.port == 8766 && url.path == "/playlist.m3u"
+                case .xtream(let server, let username): isMock = server.port == 8766 && username == "1"
+                case .mediaServer(_, let server, _): isMock = server.port == 8766
+                default: isMock = false
+                }
+                if isMock || source.name.hasPrefix("Mock ") {
+                    store.delete(source)
+                }
+            }
+            UserDefaults.standard.removeObject(forKey: "CarIPTVDebugSources")
+            Log.playback.info("debug sources removed")
+            return
+        }
+        guard let base = UserDefaults.standard.string(forKey: "CarIPTVDebugSources") else { return }
         Task {
             do {
                 if !store.sources.contains(where: { if case .xtream = $0.kind { true } else { false } }) {

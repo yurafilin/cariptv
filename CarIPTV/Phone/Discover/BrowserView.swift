@@ -150,31 +150,40 @@ struct BrowserView: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: video.canPlay ? "play.rectangle.fill" : "lock.rectangle")
-                    .font(.title2)
-                    .foregroundStyle(video.canPlay ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    .font(.title.weight(.semibold))
+                    .foregroundStyle(video.canPlay ? Color.white : Color.secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(video.canPlay ? "Watch in Car" : "This video can't go to the car")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .font(.headline)
+                        .foregroundStyle(video.canPlay ? Color.white : Color.primary)
                     Text(video.canPlay ? video.title : String(localized: "The site plays it only inside the page."))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.subheadline)
+                        .foregroundStyle(video.canPlay ? Color.white.opacity(0.85) : Color.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if video.canPlay {
                     Image(systemName: "chevron.forward")
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.white)
                 }
             }
-            .padding(12)
-            .glassSurface(in: RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: video.canPlay)
-            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 18)
+            .frame(maxWidth: .infinity, minHeight: 80)
+            .background {
+                if video.canPlay {
+                    Color.accentColor
+                        .ignoresSafeArea(.container, edges: .bottom)
+                } else {
+                    Rectangle()
+                        .fill(.regularMaterial)
+                        .ignoresSafeArea(.container, edges: .bottom)
+                }
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!video.canPlay)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
     }
 
     /// Search or a website, on the start page only: a floating glass capsule with no bar behind it.

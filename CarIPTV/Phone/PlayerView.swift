@@ -92,6 +92,7 @@ struct PlayerView: View {
                                 dismiss()
                             } label: {
                                 Label("Stop", systemImage: "stop.fill")
+                                    .foregroundStyle(.red)
                             }
                         }
                     }

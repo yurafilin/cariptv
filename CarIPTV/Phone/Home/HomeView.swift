@@ -58,6 +58,8 @@ struct HomeView: View {
             if store.sources.isEmpty {
                 Section {
                     addSourceCard
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                 }
             } else {
                 sources(store)
@@ -66,6 +68,12 @@ struct HomeView: View {
     }
 
     private static let favoritesShown = 5
+    private enum SourceCardLayout {
+        static let inset: CGFloat = 16
+        static let radius: CGFloat = 24
+        static let topInset: CGFloat = 32
+        static let buttonHeight: CGFloat = 52
+    }
 
     /// Ways to watch that need no source: the browser (YouTube and other sites) and the mirrored screen.
     private var shortcuts: some View {
@@ -77,9 +85,13 @@ struct HomeView: View {
 
     /// No source yet. The text must keep saying the app has no content of its own (App Review).
     private var addSourceCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Add your channels", systemImage: "tray")
-                .font(.headline)
+        VStack(spacing: 16) {
+            Image(systemName: "tray")
+                .font(.system(size: 48))
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            Text("Add your channels")
+                .font(.title2.weight(.semibold))
             Text("Add an M3U playlist, or connect Xtream, Jellyfin, Emby or Plex to see your content here. CarIPTV doesn't include any channels.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -87,12 +99,20 @@ struct HomeView: View {
                 AppRouter.shared.isAddSourcePresented = true
             } label: {
                 Text("Add a Source")
-                    .frame(maxWidth: .infinity)
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: SourceCardLayout.buttonHeight)
+                    .foregroundStyle(.white)
+                    .background(Color.accentColor, in: Capsule())
+                    .contentShape(Capsule())
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(.plain)
         }
-        .padding(.vertical, 8)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, SourceCardLayout.inset)
+        .padding(.bottom, SourceCardLayout.inset)
+        .padding(.top, SourceCardLayout.topInset)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: SourceCardLayout.radius, style: .continuous))
     }
 
     private func sources(_ store: LibraryStore) -> some View {
